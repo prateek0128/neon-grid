@@ -1,0 +1,26 @@
+{
+  "name": "neon-grid-cyber-heist",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "engines": { "node": ">=24.18.0 <25" },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @neon/web --filter @neon/server dev",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:browser": "pnpm build && playwright test",
+    "build": "pnpm --filter @neon/web build && pnpm --filter @neon/server build",
+    "start": "pnpm --filter @neon/server start"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0",
+    "@types/node": "24.19.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/ws": "8.18.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.3",
+    "tsx": "4.23.15"
+  }
+}
