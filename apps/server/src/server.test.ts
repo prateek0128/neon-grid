@@ -31,7 +31,7 @@ describe('WebSocket authority through Supabase getUser', () => {
     fixture = createAuthFixture();
     fixture.http.listen(0, '127.0.0.1'); await once(fixture.http, 'listening');
     const authUrl = `http://127.0.0.1:${(fixture.http.address() as AddressInfo).port}`;
-    server = createGameServer({ verifyToken: createSupabaseVerifier(authUrl, 'sb_publishable_test_fixture'), allowedOrigins: [origin] });
+    server = createGameServer({ verifyToken: createSupabaseVerifier(authUrl, 'sb_publishable_test_fixture'), allowedOrigins: [origin], allowTestArena: true });
     server.http.listen(0, '127.0.0.1'); await once(server.http, 'listening');
     url = `ws://127.0.0.1:${(server.http.address() as AddressInfo).port}/ws`;
   });

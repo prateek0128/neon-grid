@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.19.0",
-  "engines": { "node": ">=24.18.0 <25" },
+  "engines": {
+    "node": ">=24.18.0 <25"
+  },
   "scripts": {
     "dev": "pnpm --parallel --filter @neon/web --filter @neon/server dev",
     "typecheck": "tsc --noEmit -p tsconfig.json",
@@ -14,13 +16,14 @@
     "start": "pnpm --filter @neon/server start"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.3",
     "@playwright/test": "1.64.0",
     "@types/node": "24.19.1",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@types/ws": "8.18.2",
+    "tsx": "4.23.15",
     "typescript": "7.0.2",
-    "vitest": "5.0.3",
-    "tsx": "4.23.15"
+    "vitest": "5.0.3"
   }
 }

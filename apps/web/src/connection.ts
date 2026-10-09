@@ -4,7 +4,7 @@ import type { Snapshot, Vector } from '@neon/protocol';
 import { attachKeyboard } from './keyboard';
 
 export type ConnectionView = { status: 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error'; detail: string; playerId: string | null; snapshot: Snapshot | null };
-export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (view: ConnectionView) => void) {
+export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (view: ConnectionView) => void, room?: { roomId: string; matchId: string }) {
   let stopped = false;
   let socket: WebSocket | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -25,7 +25,7 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
   const inputTimer = setInterval(sendInput, 1000 / TICK_RATE);
   const { data: { subscription } } = auth.auth.onAuthStateChange((event, session) => {
     if (event === 'TOKEN_REFRESHED' && session && socket?.readyState === WebSocket.OPEN && sessionId) {
-      socket.send(JSON.stringify({ type: 'authenticate', version: PROTOCOL_VERSION, accessToken: session.access_token }));
+      socket.send(JSON.stringify({ type: 'authenticate', version: PROTOCOL_VERSION, accessToken: session.access_token, ...room }));
     }
     if (event === 'SIGNED_OUT') {
       terminal = true;
@@ -45,7 +45,7 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
       movement = { x: 0, y: 0 };
       connectionTimer = setTimeout(() => current.close(), 8000);
       current.onopen = () => {
-        current.send(JSON.stringify({ type: 'authenticate', version: PROTOCOL_VERSION, accessToken: data.session!.access_token }));
+        current.send(JSON.stringify({ type: 'authenticate', version: PROTOCOL_VERSION, accessToken: data.session!.access_token, ...room }));
       };
       current.onmessage = event => {
         if (stopped || socket !== current || terminal) return;
@@ -61,7 +61,7 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
           if (view.snapshot?.epoch === message.epoch && message.tick < view.snapshot.tick) return;
           update({ snapshot: message });
         } else if (message.type === 'error') {
-          terminal = !['SERVER_CLOSING', 'AUTH_UNAVAILABLE'].includes(message.code);
+          terminal = !['SERVER_CLOSING', 'AUTH_UNAVAILABLE', 'ROOM_UNAVAILABLE'].includes(message.code);
           update({ status: terminal ? 'error' : 'reconnecting', detail: `${message.code}: ${message.message}` });
         }
       };

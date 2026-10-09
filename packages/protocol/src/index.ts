@@ -7,7 +7,8 @@ export const INPUT_TIMEOUT_MS = 250;
 export const RECONNECT_GRACE_MS = 15000;
 
 export type Vector = { x: number; y: number };
-export type Authenticate = { type: 'authenticate'; version: 1; accessToken: string };
+export * from './rooms.ts';
+export type Authenticate = { type: 'authenticate'; version: 1; accessToken: string; roomId?: string; matchId?: string };
 export type MovementInput = {
   type: 'input'; version: 1; sessionId: string; sequence: number; movement: Vector;
 };
@@ -16,7 +17,7 @@ export type PlayerState = {
   id: string; slot: number; position: Vector; connected: boolean; lastSequence: number;
 };
 export type Snapshot = { type: 'snapshot'; version: 1; epoch: string; tick: number; players: PlayerState[] };
-export type ErrorCode = 'INVALID_MESSAGE' | 'AUTH_REQUIRED' | 'INVALID_SESSION' | 'AUTH_UNAVAILABLE' | 'SESSION_IN_USE' | 'ARENA_FULL' | 'STALE_SEQUENCE' | 'RATE_LIMITED' | 'SERVER_CLOSING';
+export type ErrorCode = 'INVALID_MESSAGE' | 'AUTH_REQUIRED' | 'INVALID_SESSION' | 'AUTH_UNAVAILABLE' | 'SESSION_IN_USE' | 'ARENA_FULL' | 'STALE_SEQUENCE' | 'RATE_LIMITED' | 'SERVER_CLOSING' | 'ROOM_REQUIRED' | 'NOT_MEMBER' | 'MATCH_UNAVAILABLE' | 'ROOM_UNAVAILABLE';
 export type ProtocolError = { type: 'error'; version: 1; code: ErrorCode; message: string };
 export type Welcome = { type: 'welcome'; version: 1; playerId: string; sessionId: string; epoch: string; tickRate: number };
 export type Authenticated = { type: 'authenticated'; version: 1 };
@@ -37,7 +38,9 @@ export function parseClientMessage(raw: string): ClientMessage | null {
   let value: unknown;
   try { value = JSON.parse(raw); } catch { return null; }
   if (!object(value) || value.version !== PROTOCOL_VERSION) return null;
-  if (value.type === 'authenticate' && exactKeys(value, ['type', 'version', 'accessToken']) &&
+  const authKeys = value.roomId !== undefined || value.matchId !== undefined ? ['type', 'version', 'accessToken', 'roomId', 'matchId'] : ['type', 'version', 'accessToken'];
+  if (value.type === 'authenticate' && exactKeys(value, authKeys) &&
+      (authKeys.length === 3 || (identifier(value.roomId) && identifier(value.matchId))) &&
       typeof value.accessToken === 'string' && value.accessToken.length >= 20 && value.accessToken.length <= 4096) {
     return value as Authenticate;
   }

@@ -6,14 +6,21 @@ import { INPUT_TIMEOUT_MS, MAX_MESSAGE_BYTES, MAX_PLAYERS, PROTOCOL_VERSION, REC
 import type { ErrorCode, PlayerState, ServerMessage, Snapshot, Vector } from '@neon/protocol';
 import { advancePosition, spawnPosition } from '@neon/simulation';
 import type { VerifyToken } from './auth.ts';
+import type { RoomStore } from './rooms.ts';
 
 type Player = PlayerState & { userId: string; movement: Vector; lastInputAt: number; disconnectedAt: number | null; socket: WebSocket | null };
-type Connection = { player: Player | null; sessionId: string; expiresAt: number; authenticating: boolean; tokens: number; rateAt: number; alive: boolean; authTimer: ReturnType<typeof setTimeout> };
+type ArenaState = { id: string; roomId: string | null; players: Map<string, Player>; eligible: Map<string, { id: string; slot: number }> };
+type Connection = { player: Player | null; arena: ArenaState | null; sessionId: string; expiresAt: number; authenticating: boolean; tokens: number; rateAt: number; alive: boolean; authTimer: ReturnType<typeof setTimeout> };
 
-export function createGameServer(options: { verifyToken: VerifyToken; allowedOrigins: string[] }) {
-  const players = new Map<string, Player>();
+export function createGameServer(options: { verifyToken: VerifyToken; allowedOrigins: string[]; rooms?: RoomStore; allowTestArena?: boolean }) {
   const connections = new Map<WebSocket, Connection>();
   const epoch = randomUUID();
+  const testArena: ArenaState = { id: epoch, roomId: null, players: new Map(), eligible: new Map() };
+  const arenas = new Map<string, ArenaState>();
+  if (options.allowTestArena) arenas.set(epoch, testArena);
+  let roomsHealthy = false;
+  let lastRoomSync = 0;
+  let syncInFlight = false;
   let tick = 0;
   let closing = false;
   const http = createServer((request, response) => {
@@ -39,20 +46,55 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
     send(ws, { type: 'error', version: PROTOCOL_VERSION, code, message });
     ws.close(code === 'SESSION_IN_USE' ? 4009 : 1008, code);
   }
-  function snapshot(): Snapshot {
-    return { type: 'snapshot', version: PROTOCOL_VERSION, epoch, tick, players: [...players.values()].map(p => ({ id: p.id, slot: p.slot, position: { ...p.position }, connected: p.connected, lastSequence: p.lastSequence })) };
+  function snapshot(arena: ArenaState): Snapshot {
+    return { type: 'snapshot', version: PROTOCOL_VERSION, epoch: arena.id, tick, players: [...arena.players.values()].map(p => ({ id: p.id, slot: p.slot, position: { ...p.position }, connected: p.connected, lastSequence: p.lastSequence })) };
   }
   function broadcast() {
-    const state = snapshot();
-    for (const [ws, connection] of connections) if (connection.player) send(ws, state);
-  }
-  function expireDisconnected(now: number) {
-    for (const [userId, player] of players) {
-      if (player.disconnectedAt !== null && now - player.disconnectedAt >= RECONNECT_GRACE_MS) players.delete(userId);
+    const snapshots = new Map<string, Snapshot>();
+    for (const [ws, connection] of connections) if (connection.player && connection.arena) {
+      if (!snapshots.has(connection.arena.id)) snapshots.set(connection.arena.id, snapshot(connection.arena));
+      send(ws, snapshots.get(connection.arena.id)!);
     }
   }
+  function expireDisconnected(now: number) {
+    for (const arena of arenas.values()) for (const [userId, player] of arena.players) {
+      if (player.disconnectedAt !== null && now - player.disconnectedAt >= RECONNECT_GRACE_MS) arena.players.delete(userId);
+    }
+  }
+  async function syncRooms() {
+    if (!options.rooms || syncInFlight || closing) return;
+    syncInFlight = true;
+    try {
+      const states = await options.rooms.tick(epoch);
+      if (closing) return;
+      roomsHealthy = true;
+      lastRoomSync = performance.now();
+      const activeMatches = new Set(states.map(state => state.matchId));
+      for (const state of states) {
+        let arena = arenas.get(state.matchId);
+        if (!arena) {
+          arena = { id: state.matchId, roomId: state.roomId, players: new Map(), eligible: new Map() };
+          arenas.set(state.matchId, arena);
+        }
+        arena.eligible = new Map(state.members.map(m => [m.userId, { id: m.id, slot: m.slot }]));
+        for (const [userId, player] of arena.players) if (!arena.eligible.has(userId)) {
+          if (player.socket) reject(player.socket, 'NOT_MEMBER', 'Room membership was revoked.');
+          arena.players.delete(userId);
+        }
+      }
+      for (const [id, arena] of arenas) if (arena.roomId && !activeMatches.has(id)) {
+        for (const player of arena.players.values()) if (player.socket) reject(player.socket, 'MATCH_UNAVAILABLE', 'Movement session ended. Return to the lobby.');
+        arenas.delete(id);
+      }
+    } catch {
+      roomsHealthy = false;
+      for (const [ws, connection] of connections) if (connection.arena?.roomId) reject(ws, 'ROOM_UNAVAILABLE', 'Room authority unavailable. Reconnecting…');
+    } finally { syncInFlight = false; }
+  }
+  const roomTimer = setInterval(() => { void syncRooms(); }, 1000);
+  void syncRooms();
   wss.on('connection', (ws: WebSocket) => {
-    const connection: Connection = { player: null, sessionId: randomUUID(), expiresAt: 0, authenticating: false, tokens: 90, rateAt: performance.now(), alive: true,
+    const connection: Connection = { player: null, arena: null, sessionId: randomUUID(), expiresAt: 0, authenticating: false, tokens: 90, rateAt: performance.now(), alive: true,
       authTimer: setTimeout(() => reject(ws, 'AUTH_REQUIRED', 'Authenticate within five seconds.'), 5000) };
     connections.set(ws, connection);
     ws.on('error', () => { /* Socket close handles player cleanup. Do not log payloads or tokens. */ });
@@ -90,18 +132,36 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
           reject(ws, 'INVALID_SESSION', 'A valid session for this player is required.'); return;
         }
         if (connection.player) {
+          if (connection.arena?.roomId && (message.roomId !== connection.arena.roomId || message.matchId !== connection.arena.id)) {
+            reject(ws, 'INVALID_SESSION', 'Room identity cannot change on renewal.'); return;
+          }
           connection.expiresAt = identity.expiresAt;
           send(ws, { type: 'authenticated', version: PROTOCOL_VERSION });
           return;
         }
+        let arena = testArena;
+        let member: { id: string; slot: number } | null = null;
+        if (message.roomId && message.matchId) {
+          if (!options.rooms || !roomsHealthy || performance.now() - lastRoomSync > 5000) { reject(ws, 'ROOM_UNAVAILABLE', 'Room authority unavailable.'); return; }
+          try { member = await options.rooms.authorize(message.accessToken, message.roomId, message.matchId, epoch); }
+          catch { reject(ws, 'ROOM_UNAVAILABLE', 'Room authorization unavailable.'); return; }
+          if (ws.readyState !== WebSocket.OPEN || closing) return;
+          const target = arenas.get(message.matchId);
+          if (!member || !target || target.roomId !== message.roomId || target.eligible.get(identity.userId)?.id !== member.id) {
+            reject(ws, 'NOT_MEMBER', 'Active membership in this server match is required.'); return;
+          }
+          arena = target;
+        } else if (!options.allowTestArena) { reject(ws, 'ROOM_REQUIRED', 'Join and start a room before connecting.'); return; }
+        connection.arena = arena;
+        const players = arena.players;
         expireDisconnected(performance.now());
         let player = players.get(identity.userId);
         if (player?.socket && player.socket.readyState !== WebSocket.CLOSED) { reject(ws, 'SESSION_IN_USE', 'This identity is already connected in another tab.'); return; }
         if (!player) {
           if (players.size >= MAX_PLAYERS) { reject(ws, 'ARENA_FULL', 'The four-player test arena is full.'); return; }
           const usedSlots = new Set([...players.values()].map(p => p.slot));
-          const slot = [1, 2, 3, 4].find(s => !usedSlots.has(s))!;
-          player = { id: randomUUID(), userId: identity.userId, slot, position: spawnPosition(slot), connected: true, lastSequence: -1, movement: { x: 0, y: 0 }, lastInputAt: now, disconnectedAt: null, socket: ws };
+          const slot = member?.slot ?? [1, 2, 3, 4].find(s => !usedSlots.has(s))!;
+          player = { id: member?.id ?? randomUUID(), userId: identity.userId, slot, position: spawnPosition(slot), connected: true, lastSequence: -1, movement: { x: 0, y: 0 }, lastInputAt: now, disconnectedAt: null, socket: ws };
           players.set(identity.userId, player);
         }
         player.socket = ws;
@@ -112,7 +172,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
         connection.player = player;
         connection.expiresAt = identity.expiresAt;
         clearTimeout(connection.authTimer);
-        send(ws, { type: 'welcome', version: PROTOCOL_VERSION, playerId: player.id, sessionId: connection.sessionId, epoch, tickRate: TICK_RATE });
+        send(ws, { type: 'welcome', version: PROTOCOL_VERSION, playerId: player.id, sessionId: connection.sessionId, epoch: arena.id, tickRate: TICK_RATE });
         broadcast();
         return;
       }
@@ -137,7 +197,8 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
     expireDisconnected(now);
     while (accumulator >= stepMs) {
       tick += 1;
-      for (const player of players.values()) {
+      for (const arena of arenas.values()) for (const player of arena.players.values()) {
+        if (arena.roomId && (!roomsHealthy || now - lastRoomSync > 5000)) player.movement = { x: 0, y: 0 };
         if (!player.connected || player.socket?.readyState !== WebSocket.OPEN || now - player.lastInputAt > INPUT_TIMEOUT_MS) player.movement = { x: 0, y: 0 };
         player.position = advancePosition(player.position, player.movement, 1 / TICK_RATE);
       }
@@ -158,6 +219,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
       closing = true;
       clearInterval(simulationTimer);
       clearInterval(heartbeatTimer);
+      clearInterval(roomTimer);
       for (const [ws, connection] of connections) {
         clearTimeout(connection.authTimer);
         send(ws, { type: 'error', version: PROTOCOL_VERSION, code: 'SERVER_CLOSING', message: 'Server restarting.' });
