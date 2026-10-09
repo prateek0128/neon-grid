@@ -6,7 +6,7 @@ async function position(page: Page, id: string) {
   return { x: Number(await player.getAttribute('data-x')), y: Number(await player.getAttribute('data-y')) };
 }
 async function connect(page: Page) {
-  await page.goto('/');
+  await page.goto('/movement-test');
   await page.getByRole('button', { name: 'Connect player' }).click();
   await expect(page.getByTestId('connection-status')).toHaveText('connected');
   const self = page.locator('[data-self="true"]');

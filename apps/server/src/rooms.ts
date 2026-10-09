@@ -4,7 +4,7 @@ import type { RoomArena } from '@neon/protocol';
 
 export type RoomAuthorization = { id: string; slot: number };
 export type RoomStore = {
-  tick(instanceId: string): Promise<RoomArena[]>;
+  tick(instanceId: string, connectedMembers: string[]): Promise<RoomArena[]>;
   authorize(token: string, roomId: string, matchId: string, instanceId: string): Promise<RoomAuthorization | null>;
 };
 export function createSupabaseRooms(url: string, publicKey: string, serverKey: string): RoomStore {
@@ -12,8 +12,8 @@ export function createSupabaseRooms(url: string, publicKey: string, serverKey: s
     global: { fetch: (input: RequestInfo | URL, init?: RequestInit) => fetch(input, { ...init, signal: AbortSignal.timeout(4000) }) } };
   const operations = createClient(url, serverKey, settings);
   return {
-    async tick(instanceId) {
-      const { data, error } = await operations.rpc('ng_server_tick', { p_instance_id: instanceId });
+    async tick(instanceId, connectedMembers) {
+      const { data, error } = await operations.rpc('ng_server_tick', { p_instance_id: instanceId, p_connected_members: connectedMembers });
       if (error || !data?.ok || !Array.isArray(data.arenas)) throw new Error('Room authority unavailable.');
       return data.arenas as RoomArena[];
     },

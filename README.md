@@ -1,19 +1,12 @@
 # NEON GRID: CYBER HEIST
 
-Phase 1: an authoritative multiplayer movement proof, not the full game.
+Phase 2: secure private rooms, lobby and authoritative multiplayer movement. The full heist mechanics are intentionally absent.
 
-React/TypeScript/Vite renders a temporary Canvas 2D arena. A separate persistent TypeScript WebSocket server validates Supabase Auth sessions and runs the movement simulation. No other game's code, backend, database, or credentials are used.
+React/TypeScript/Vite renders the interface and Canvas 2D arena. Supabase Auth supplies anonymous identity; Postgres RPCs control durable room state. A separate persistent TypeScript WebSocket server independently activates matches and owns all movement. No sibling game's repository, backend or credentials are used.
 
-## Requirements
+## Local requirements and configuration
 
-- Node 24.18 or later in the Node 24 release line, with `node` available on PATH.
-- pnpm 11.19.0 (the version pinned in `packageManager`).
-- A dedicated Supabase project with anonymous sign-ins enabled in Authentication settings. The frontend silently creates an anonymous session; players do not enter account credentials.
-- If CAPTCHA is mandatory on the project, anonymous sign-in needs a CAPTCHA integration that is outside this phase. Use a dedicated development project with compatible settings for this proof; do not weaken a shared production project.
-
-## Local setup
-
-From this repository's root:
+Use Node 24.18+ in the Node 24 release line and pnpm 11.19.0. A **dedicated NEON GRID Supabase project** is required for live play; enable anonymous sign-ins and apply the migration in `supabase/migrations`. See `docs/phase2-database.md` before applying anything remotely. A project requiring CAPTCHA also needs a compatible CAPTCHA flow; that integration is not implemented here.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -21,79 +14,73 @@ cp apps/web/.env.example apps/web/.env
 cp apps/server/.env.example apps/server/.env
 ```
 
-Edit those two ignored `.env` files with the dedicated project's public configuration. Never add service-role or secret keys. No privileged key is required for Phase 1.
+Edit the ignored environment files; placeholders cannot connect to a project.
 
-| File | Variable | Purpose |
+| File | Variable | Value/purpose |
 | --- | --- | --- |
-| `apps/web/.env` | `VITE_SUPABASE_URL` | Supabase project URL |
-| `apps/web/.env` | `VITE_SUPABASE_PUBLISHABLE_KEY` | Public publishable key (legacy public anon key also accepted) |
-| `apps/web/.env` | `VITE_GAME_SERVER_URL` | `ws://127.0.0.1:8787/ws` locally |
-| `apps/server/.env` | `SUPABASE_URL` | Same Supabase project URL |
-| `apps/server/.env` | `SUPABASE_PUBLISHABLE_KEY` | Same public key; used for Auth `getUser(token)` |
-| `apps/server/.env` | `HOST` | `127.0.0.1` locally; explicit binding for later hosting |
-| `apps/server/.env` | `PORT` | `8787` locally |
-| `apps/server/.env` | `ALLOWED_ORIGINS` | Comma-separated exact browser origins, no trailing slashes; defaults shown in example |
+| Browser | `VITE_SUPABASE_URL` | Dedicated project URL |
+| Browser | `VITE_SUPABASE_PUBLISHABLE_KEY` | Publishable key, or legacy public anon key |
+| Browser | `VITE_GAME_SERVER_URL` | `ws://127.0.0.1:8787/ws` locally; `wss://` with HTTPS |
+| Server | `SUPABASE_URL` | Same dedicated project URL |
+| Server | `SUPABASE_PUBLISHABLE_KEY` | Same public key; Auth verification and user-scoped room checks |
+| Server | `SUPABASE_SERVER_KEY` | Server secret key, or legacy service-role key; operational RPC only |
+| Server | `HOST` | `127.0.0.1` locally |
+| Server | `PORT` | `8787` locally |
+| Server | `ALLOWED_ORIGINS` | `http://localhost:5173,http://127.0.0.1:5173` locally; exact origins, no trailing slashes |
+| Server | `NODE_ENV` | `development` locally; `production` for later production use |
+| Server | `ENABLE_MOVEMENT_TEST_ARENA` | `false` normally; `true` only with `NODE_ENV=development` for the old movement route |
 
-`VITE_` variables become public build output. Environment examples contain placeholders only. Restart development processes after changing configuration.
+**Never put the server key in a VITE variable, browser code, chat, or Git.** It is new in Phase 2 because only the trusted server may activate matches and clean rooms. The browser uses only the project URL, publishable key and WebSocket address. No migration or deployment is performed by startup.
 
 ```sh
 pnpm dev
 ```
 
-Open `http://127.0.0.1:5173`. The game server's health endpoint is `http://127.0.0.1:8787/health`.
+Open `http://127.0.0.1:5173`. Server health: `http://127.0.0.1:8787/health`. Separate commands are `pnpm --filter @neon/web dev` and `pnpm --filter @neon/server dev`.
 
-To run each application separately:
+## Two-client live verification
+
+1. Configure the dedicated project, anonymous Auth and migration above. Start both local applications.
+2. Open the browser URL in a normal window and a private window or separate browser profile. These must have isolated storage; copied tabs may share the same anonymous identity.
+3. In A, enter a callsign and click **Create Room**. Copy its 12-character code using **Copy code**.
+4. In B, enter a different callsign, paste the code, and click **Join Room**. Both rosters should show the two distinct names; A is host and each identifies itself with `YOU`.
+5. Ready both players. Only A has **Start Match**, enabled when everyone is ready and at least two members are active.
+6. Start from A. Both should transition `LOBBY → STARTING → IN MATCH` and show connected movement. B cannot create a competing start; a new outsider cannot join after start.
+7. Move A with WASD and B with arrows; watch each in the other window. Release stops movement; diagonals are normalized.
+8. Reload B or briefly interrupt its socket. Its authorized room and membership/player ID should restore. Position resumes if the server retained it within the 15-second movement grace. Membership has a separate 30-second heartbeat window.
+9. In A, choose **Return to Lobby**. This deliberately ends the Phase 2 movement session for everyone and clears readiness, without adding results or scoring.
+10. Leave from A. B becomes host deterministically. Leaving the final member deletes the room.
+11. Restart the game server during movement. Once its old 10-second runtime lease expires, the replacement aborts the old session and returns the room to lobby with a clear error; it does not claim that gameplay continued.
+
+For another device on the same LAN, explicitly bind Vite (`pnpm --filter @neon/web dev --host 0.0.0.0`) and server HOST to `0.0.0.0`, use the computer's LAN IP in `VITE_GAME_SERVER_URL`, and add the exact LAN browser origin to `ALLOWED_ORIGINS`. Restart Vite after changing environment. Desktop keyboard controls are included; touch controls are not.
+
+## Checks and production builds
 
 ```sh
-pnpm --filter @neon/server dev
-pnpm --filter @neon/web dev
-```
-
-To verify and build:
-
-```sh
+pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
 pnpm build
-```
-
-The browser build is `apps/web/dist/`; the bundled server entry is `apps/server/dist/index.js`. `pnpm start` runs that server using its `.env`. `pnpm --filter @neon/web preview` serves the browser build locally; add its exact origin to `ALLOWED_ORIGINS` and rebuild the browser with the intended configuration first.
-
-## Two-browser manual proof
-
-1. Start the local apps with the actual dedicated Supabase configuration.
-2. Open `http://127.0.0.1:5173` in a normal browser window and in a separate private window or another browser profile. Two tabs copied from one another can inherit session storage; isolated windows/profiles avoid sharing identity.
-3. Click **Connect player** in both. Both should say **connected** and list two players with distinct full server-issued IDs. Each window should mark its own player `YOU`; the canvas marks it with a white ring.
-4. In the first window, hold D, release it, then hold W+A. Observe its movement in both windows. It should stop after release; diagonal speed should match cardinal speed.
-5. In the second window, use the arrow keys. Observe movement and release in both windows. Opposing directions cancel.
-6. Hold a movement key and change focus away from the page. Movement should stop. Returning focus should not leave a stuck key.
-7. Click **Disconnect** in the first window. The second player's identity and movement must remain valid. The first player is dimmed and reserved for 15 seconds.
-8. Reconnect the first window within 15 seconds. Its player ID and position should be preserved, with a new socket session ID. After the grace period, a new player identity/spawn is expected.
-9. Briefly stop and restart the server. Both pages should show reconnection status and recover automatically. Server restart intentionally resets arena state and player IDs; the Auth identity remains in the tab.
-
-Phase 1 has one shared test arena, with four slots and no room codes. Room creation, readiness, and match lifecycle belong to Phase 2. This phase supplies keyboard controls only, not mobile touch controls.
-
-## Automated browser proof
-
-```sh
 pnpm exec playwright install chromium
 pnpm test:browser
 ```
 
-These tests build the production server and launch it locally alongside Vite and a **test-only Auth HTTP fixture**. Two isolated Chromium contexts go through the normal browser Auth SDK and server `getUser` path. The fixture returns unsigned synthetic tokens and exists solely in `tests/`; it is not deployed or imported by the production entry. This proves browser networking/rendering/input against a validated fixture session, not a live Supabase project.
+The browser build is `apps/web/dist/`; the bundled server entry is `apps/server/dist/index.js`. `pnpm start` starts that server with its ignored `.env`. Frontend preview is `pnpm --filter @neon/web preview`; its origin also needs explicit server authorization.
 
-Ports 5173, 9100 and 9101 must be free. Stop normal development servers first. Test traces and screenshots go to ignored `test-results/`.
+The database suite executes the migration, SQL functions, RLS and role grants using embedded PostgreSQL (PGlite). Auth/API fixtures are test-only. Browser tests run two isolated Chromium contexts against the built production server and Vite frontend, with those SQL-backed fixtures. These results are **not live Supabase verification**. PGlite serializes execution; its competing-final-slot test does not prove multi-connection production lock behavior. Ports 5173, 9100 and 9101 must be free. Screenshots/traces go to ignored `test-results/`.
 
-## Scope and limitations
+## Preserved development movement route
 
-- No gameplay database writes, migrations, persistent room schema, or Supabase Realtime channels in Phase 1.
-- No cores, lasers, abilities, scores, extraction, results, extra arenas, or advanced effects.
-- In-memory single-process authority. No horizontal scaling or restart recovery.
-- Auth is remotely checked at connection/token renewal; expiration is enforced during play. Immediate revocation detection between checks is not implemented.
-- Rendering eases toward server positions; no client prediction or input replay yet. Latency will be noticeable on distant networks.
-- Bound catch-up prevents jumps after process stalls, but the simulation slows under overload rather than offering competitive timing guarantees.
-- Anonymous Auth signup throttling and test arena capacity apply; no room-specific isolation or deployment-grade perimeter rate limiting yet.
-- Socket-origin checks prevent unintended browser origins, but are not a substitute for authentication.
-- Only local automated Chromium testing is included; physical devices, other browsers, and a live Supabase project require separate verification.
+With Vite development mode and server `NODE_ENV=development`, set `ENABLE_MOVEMENT_TEST_ARENA=true`, then visit `/movement-test`. It preserves Phase 1 behavior and still requires a valid Supabase token. The route is removed from the production browser bundle; roomless socket admission is disabled outside the explicit server development setting. There is no production authentication bypass.
 
-See `docs/architecture.md` for protocol/security details and `docs/hosting.md` for the read-only mission/hosting investigation. No production deployment was performed.
+## Security and boundaries
+
+Room creation/join/readiness/start/leave/return use security-definer RPCs with identity checks, fixed search paths, explicit grants, request deduplication, revision checks, row locks and database constraints. Exposed tables are member-read-only under RLS. Codes, requests, limits, matches and the server lease live in a non-exposed schema. Do not add `ng_private` to API-exposed schemas.
+
+Lobby snapshots poll every two seconds; notifications are not a source of truth and no Supabase Realtime channel is needed. Membership snapshots and runtime state are reconciled by the server each second. Movement is in memory and never written per tick to Postgres. Removal is enforced at new socket admission and within the next successful server reconciliation for existing sockets. Database failure stops room movement and closes its sockets; reconnect uses fresh authorization.
+
+Rooms expire after two hours. Cleanup runs while the persistent server is running. Dormant cleanup resumes on the next startup. Lobby membership needs a heartbeat within 30 seconds; verified live movement sockets also renew existing membership. Missing membership cannot be recreated by the heartbeat. Empty rooms are deleted. A user may hold one active room membership. Stable membership UUIDs serve as server-issued player IDs; socket session IDs change on reconnect.
+
+One server process owns a 10-second runtime lease. This phase does not support horizontal scaling. A replacement process aborts old sessions rather than reconstructing them. Movement position memory lasts 15 seconds after socket closure; the membership identity survives as long as room membership is valid. Auth is checked at socket admission/renewal and token expiration is enforced, but immediate Auth revocation between those checks is not implemented. The client makes one forced refresh attempt after an expired session error.
+
+No cores, lasers, dash, shield, scoring, extraction, match results, round timer, additional arenas or deployment. Physical-device, non-Chromium and dedicated live-project testing remain required. See `docs/phase2-database.md`, `docs/architecture.md` and `docs/phase2-report.md`.

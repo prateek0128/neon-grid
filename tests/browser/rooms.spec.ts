@@ -1,0 +1,50 @@
+import { expect, test } from '@playwright/test';
+
+test('two isolated browser sessions create, join, ready, start, move, reconnect and return to lobby using SQL RPCs', async ({ browser }) => {
+  const ca = await browser.newContext({ permissions:['clipboard-read','clipboard-write'] }); const cb = await browser.newContext();
+  const a = await ca.newPage(); const b = await cb.newPage();
+  const errors: string[]=[]; a.on('pageerror',e=>errors.push(e.message)); b.on('pageerror',e=>errors.push(e.message));
+  try {
+    await a.goto('/'); await b.goto('/');
+    await expect(a.getByRole('heading',{name:'The grid is better with company.'})).toBeVisible();
+    await a.screenshot({path:'test-results/phase2-landing.png',fullPage:true});
+    await a.getByLabel('Your callsign').fill('Cipher');
+    await a.getByRole('button',{name:'Create Room',exact:true}).click();
+    await expect(a.getByTestId('room-code')).toBeVisible();
+    const code=(await a.getByTestId('room-code').textContent())!;
+    await a.getByRole('button',{name:'Copy code'}).click();
+    await expect(a.getByRole('button',{name:'Copied',exact:true})).toBeVisible();
+    expect(await a.evaluate(()=>navigator.clipboard.readText())).toBe(code);
+    await b.getByLabel('Your callsign').fill('Ghost'); await b.getByLabel('Room code',{exact:true}).fill(code);
+    await b.getByRole('button',{name:'Join Room',exact:true}).click();
+    await expect(a.getByTestId('roster-member')).toHaveCount(2); await expect(b.getByTestId('roster-member')).toHaveCount(2);
+    const aid=(await a.getByTestId('roster-member').filter({hasText:'Cipher'}).getAttribute('data-member-id'))!;
+    const bid=(await b.getByTestId('roster-member').filter({hasText:'Ghost'}).getAttribute('data-member-id'))!;
+    expect(aid).not.toBe(bid); await expect(b.getByRole('button',{name:'Start Match'})).toHaveCount(0);
+    await a.getByRole('button',{name:'Ready up'}).click(); await expect(a.getByRole('button',{name:'Unready',exact:true})).toBeVisible();
+    await b.getByRole('button',{name:'Ready up'}).click();
+    await expect(a.getByRole('button',{name:'Start Match'})).toBeEnabled(); await a.getByRole('button',{name:'Start Match'}).click();
+    await expect(a.getByTestId('room-status')).toHaveText('IN MATCH'); await expect(b.getByTestId('room-status')).toHaveText('IN MATCH');
+    await expect(a.getByTestId('connection-status')).toHaveText('connected'); await expect(b.getByTestId('connection-status')).toHaveText('connected');
+    await expect(a.locator('[data-self="true"]')).toHaveAttribute('data-player-id',aid);
+    await expect(b.locator('[data-self="true"]')).toHaveAttribute('data-player-id',bid);
+    const ap=a.locator(`[data-player-id="${aid}"]`); const bp=b.locator(`[data-player-id="${aid}"]`);
+    const start=Number(await ap.getAttribute('data-x'));
+    await a.keyboard.down('KeyD'); await expect.poll(async()=>Number(await bp.getAttribute('data-x'))).toBeGreaterThan(start+15); await a.keyboard.up('KeyD');
+    const initialB=Number(await b.locator(`[data-player-id="${bid}"]`).getAttribute('data-y'));
+    await b.keyboard.down('ArrowDown'); await expect.poll(async()=>Number(await a.locator(`[data-player-id="${bid}"]`).getAttribute('data-y'))).toBeGreaterThan(initialB+15); await b.keyboard.up('ArrowDown');
+    await b.reload();
+    await expect(b.getByTestId('room-code')).toHaveText(code); await expect(b.getByTestId('connection-status')).toHaveText('connected');
+    await expect(b.locator('[data-self="true"]')).toHaveAttribute('data-player-id',bid);
+    await a.screenshot({path:'test-results/phase2-room.png',fullPage:true});
+    await a.getByRole('button',{name:'Return to Lobby'}).click();
+    await expect(a.getByTestId('room-status')).toHaveText('LOBBY'); await expect(b.getByTestId('room-status')).toHaveText('LOBBY');
+    await expect(a.getByRole('button',{name:'Ready up'})).toBeVisible();
+    await a.getByRole('button',{name:'Leave Room'}).click();
+    await expect(a.getByRole('button',{name:'Create Room',exact:true})).toBeVisible();
+    await expect(b.getByTestId('roster-member')).toHaveCount(1);
+    await expect(b.getByTestId('roster-member')).toContainText('HOST');
+    await b.getByRole('button',{name:'Leave Room'}).click();
+    expect(errors).toEqual([]);
+  } finally { await ca.close(); await cb.close(); }
+});

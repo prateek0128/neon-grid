@@ -121,4 +121,19 @@ describe('migration RPCs and RLS on embedded PostgreSQL (not live Supabase)', ()
     const state=room(await data.rpc(host, 'ng_return_lobby', { p_request_id:randomUUID(), p_room_id:initial.id,p_revision:(await snapshot()).revision }));
     expect(state.status).toBe('LOBBY'); expect(state.members.every(m=>!m.ready)).toBe(true);
   });
+  it('keeps verified sockets alive without recreating revoked membership', async () => {
+    await join(); await ready(host); await ready(guest); await start(); const instance=randomUUID();
+    await data.rpc(null,'ng_server_tick',{p_instance_id:instance},'service_role');
+    await data.db.query("update public.ng_room_members set last_seen_at=now()-interval '20 seconds' where user_id=$1",[host]);
+    await data.rpc(null,'ng_server_tick',{p_instance_id:instance,p_connected_members:[initial.selfMemberId]},'service_role');
+    expect(await snapshot()).toBeTruthy();
+    await data.db.query('delete from public.ng_room_members where user_id=$1',[host]);
+    await data.rpc(null,'ng_server_tick',{p_instance_id:instance,p_connected_members:[initial.selfMemberId]},'service_role');
+    expect(await data.rpc(host,'ng_get_room',{p_room_id:initial.id})).toMatchObject({code:'NOT_MEMBER'});
+  });
+  it('persists failed code-attempt limits and rejects invalid names', async () => {
+    expect(await data.rpc(guest,'ng_create_room',{p_request_id:randomUUID(),p_name:'\n'})).toMatchObject({code:'INVALID_NAME'});
+    for(let i=0;i<11;i++) await join(guest,randomUUID(),'BAD');
+    expect(await join(guest,randomUUID(),'BAD')).toMatchObject({code:'RATE_LIMITED'});
+  });
 });

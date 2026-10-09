@@ -27,7 +27,8 @@ export async function createTestDatabase() {
   async function rpc(userId: string | null, name: string, args: Record<string, unknown> = {}, role: 'authenticated' | 'anon' | 'service_role' = 'authenticated') {
     if (!/^ng_[a-z_]+$/.test(name) || Object.keys(args).some(key => !/^p_[a-z_]+$/.test(key))) throw new Error('Invalid fixture RPC');
     const parameters = Object.keys(args).map((key, i) => `${key} => $${i + 1}`).join(',');
-    const rows = await asRole<{ result: RoomResult & { arenas?: unknown[] } }>(role, userId, `select public.${name}(${parameters}) as result`, Object.values(args));
+    const values = Object.entries(args).map(([key,value]) => key==='p_connected_members' && Array.isArray(value) ? `{${value.join(',')}}` : value);
+    const rows = await asRole<{ result: RoomResult & { arenas?: unknown[] } }>(role, userId, `select public.${name}(${parameters}) as result`, values);
     return rows[0]!.result;
   }
   return { db, user, asRole, rpc };

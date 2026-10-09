@@ -22,6 +22,12 @@ for (const origin of origins) {
 const serverKey = process.env.SUPABASE_SERVER_KEY;
 const allowTestArena = process.env.ENABLE_MOVEMENT_TEST_ARENA === 'true' && process.env.NODE_ENV === 'development';
 if (!serverKey) throw new Error('Configure SUPABASE_SERVER_KEY on the server only for secure room operations.');
+if (!serverKey.startsWith('sb_secret_')) {
+  try {
+    const payload = JSON.parse(Buffer.from(serverKey.split('.')[1] ?? '', 'base64url').toString()) as { role?: string };
+    if (payload.role !== 'service_role') throw new Error('Wrong role');
+  } catch { throw new Error('SUPABASE_SERVER_KEY must be a server secret or legacy service-role key.'); }
+}
 const server = createGameServer({ verifyToken: createSupabaseVerifier(url, key), allowedOrigins: origins,
   rooms: createSupabaseRooms(url, key, serverKey), allowTestArena });
 server.http.listen(port, process.env.HOST ?? '127.0.0.1', () => console.log(`NEON GRID movement server listening on port ${port}`));

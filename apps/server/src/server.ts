@@ -65,7 +65,8 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
     if (!options.rooms || syncInFlight || closing) return;
     syncInFlight = true;
     try {
-      const states = await options.rooms.tick(epoch);
+      const connected = [...connections].filter(([ws,c]) => ws.readyState===WebSocket.OPEN && c.player && c.arena?.roomId && c.expiresAt>Date.now()).map(([,c])=>c.player!.id);
+      const states = await options.rooms.tick(epoch, connected);
       if (closing) return;
       roomsHealthy = true;
       lastRoomSync = performance.now();
@@ -143,8 +144,10 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
         let member: { id: string; slot: number } | null = null;
         if (message.roomId && message.matchId) {
           if (!options.rooms || !roomsHealthy || performance.now() - lastRoomSync > 5000) { reject(ws, 'ROOM_UNAVAILABLE', 'Room authority unavailable.'); return; }
+          connection.authenticating = true;
           try { member = await options.rooms.authorize(message.accessToken, message.roomId, message.matchId, epoch); }
           catch { reject(ws, 'ROOM_UNAVAILABLE', 'Room authorization unavailable.'); return; }
+          finally { connection.authenticating = false; }
           if (ws.readyState !== WebSocket.OPEN || closing) return;
           const target = arenas.get(message.matchId);
           if (!member || !target || target.roomId !== message.roomId || target.eligible.get(identity.userId)?.id !== member.id) {

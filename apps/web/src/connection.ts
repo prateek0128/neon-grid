@@ -13,6 +13,8 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
   let sequence = 0;
   let sessionId: string | null = null;
   let terminal = false;
+  let refreshAuth = false;
+  let authFailures = 0;
   let movement: Vector = { x: 0, y: 0 };
   let view: ConnectionView = { status: 'connecting', detail: 'Validating identity…', playerId: null, snapshot: null };
   const update = (patch: Partial<ConnectionView>) => { view = { ...view, ...patch }; if (!stopped) onView(view); };
@@ -35,6 +37,11 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
   });
   async function open() {
     try {
+      if (refreshAuth) {
+        refreshAuth = false;
+        const renewed = await auth.auth.refreshSession();
+        if (renewed.error || !renewed.data.session) throw new Error('Session expired. Reload to authenticate again.');
+      }
       const { data, error } = await auth.auth.getSession();
       if (stopped) return;
       if (error || !data.session) throw new Error('No Supabase session. Connect again.');
@@ -55,6 +62,7 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
           if (connectionTimer) clearTimeout(connectionTimer);
           sessionId = message.sessionId;
           attempts = 0;
+          authFailures = 0;
           update({ status: 'connected', detail: 'Movement validated by the server', playerId: message.playerId, snapshot: null });
           sendInput();
         } else if (message.type === 'snapshot') {
@@ -62,6 +70,10 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
           update({ snapshot: message });
         } else if (message.type === 'error') {
           terminal = !['SERVER_CLOSING', 'AUTH_UNAVAILABLE', 'ROOM_UNAVAILABLE'].includes(message.code);
+          if (message.code === 'INVALID_SESSION' && authFailures++ === 0) {
+            terminal = false;
+            refreshAuth = true;
+          }
           update({ status: terminal ? 'error' : 'reconnecting', detail: `${message.code}: ${message.message}` });
         }
       };

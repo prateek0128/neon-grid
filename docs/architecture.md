@@ -44,3 +44,13 @@ Rendering runs separately using animation frames and eases each visible position
 - No database mutation, privileged key, raw input/token logging, Auth fixture mode or shared-game dependency in production code.
 
 Tests cover vectors/bounds, keyboard mapping, strict envelopes, authenticated multi-client snapshots, key release, expired/unknown sessions, malformed messages, spoofed socket IDs, replay, rates, stale-input timeout, reconnect identity, duplicates, capacity, renewal and origin denial. Playwright tests exercise real browser behavior using the test-only Auth fixture.
+
+## Phase 2 extension
+
+The root browser route now presents a private-room lobby. The original Phase 1 screen is preserved at `/movement-test` only in Vite development mode. Server roomless admission requires both `NODE_ENV=development` and `ENABLE_MOVEMENT_TEST_ARENA=true`, and still validates Supabase Auth. Production clients must provide room and match IDs in the authentication envelope; neither is accepted as proof of membership.
+
+The browser obtains a validated `ng_get_room` snapshot before connecting to the movement session. The server separately verifies the Auth token and user-scoped database membership, checks the match ID and owning runtime instance, and scopes each player's map/snapshots to that match. Membership UUIDs become stable player IDs; every socket has a fresh session ID and sequence space. The existing normalization, fixed-step movement, input timeout, rendering and protocol rejection remain intact.
+
+Lobby snapshots are polled every two seconds; server metadata is reconciled every second. There are no public realtime channels or per-tick database writes. A ten-second singleton lease fences game-server ownership. The server independently promotes pending starts after checking requester/host, frozen roster, revisions and readiness. Different rooms have isolated arena maps. Removed members and ended/expired rooms lose socket access on reconciliation; authority-sync failure neutralizes movement and closes room sockets.
+
+Privileged server configuration is now necessary only for operational room RPCs. It is excluded from browser environment/builds. All exposed room mutations remain authenticated RPCs with explicit identity checks; tables are member-read-only under RLS. See `phase2-database.md` for the exact schema, grants, migration instructions and local/live verification distinction.

@@ -118,7 +118,7 @@ create function ng_private.command(p_action text,p_request_id uuid,p_room_id uui
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
   uid uuid := auth.uid(); payload jsonb; cached ng_private.requests; r public.ng_rooms;
-  me public.ng_room_members; rid uuid; mid uuid; code text; slot_number smallint;
+  me public.ng_room_members; rid uuid; mid uuid; generated_code text; slot_number smallint;
   result jsonb; count_members integer; attempts_now integer; roster jsonb;
 begin
   if uid is null then return ng_private.error('AUTH_REQUIRED','Sign in anonymously first.'); end if;
@@ -155,8 +155,8 @@ begin
       insert into public.ng_rooms(id,host_member_id) values(rid,mid);
       -- 48 unpredictable bits, with a unique constraint and collision retry.
       loop
-        code:=upper(substr(replace(gen_random_uuid()::text,'-',''),21,12));
-        begin insert into ng_private.codes values(code,rid); exit; exception when unique_violation then null; end;
+        generated_code:=upper(substr(replace(gen_random_uuid()::text,'-',''),21,12));
+        begin insert into ng_private.codes values(generated_code,rid); exit; exception when unique_violation then null; end;
       end loop;
       insert into public.ng_room_members(id,room_id,user_id,slot,display_name) values(mid,rid,uid,1,btrim(p_name));
       result:=jsonb_build_object('ok',true,'roomId',rid);
@@ -226,6 +226,10 @@ begin
       end if;
     else result:=ng_private.error('INVALID_REQUEST','Unknown room action.'); end if;
   end if;
+  -- Cache a room reference, never a stale room snapshot.
+  if result->>'ok'='true' and result ? 'room' then
+    result:=jsonb_build_object('ok',true,'roomId',(result#>>'{room,id}')::uuid);
+  end if;
   insert into ng_private.requests(user_id,request_id,action,payload,result) values(uid,p_request_id,p_action,payload,result);
   if result ? 'roomId' then return ng_private.snapshot((result->>'roomId')::uuid,uid); end if;
   return result;
@@ -251,7 +255,7 @@ end;
 $$;
 
 -- One persistent process owns the runtime lease. Expired owners are fenced and their matches aborted.
-create function public.ng_server_tick(p_instance_id uuid) returns jsonb language plpgsql security definer set search_path='' as $$
+create function public.ng_server_tick(p_instance_id uuid,p_connected_members uuid[] default '{}'::uuid[]) returns jsonb language plpgsql security definer set search_path='' as $$
 declare runtime ng_private.runtime; r public.ng_rooms; match ng_private.matches; roster_now jsonb; removed integer; arenas jsonb:='[]'::jsonb;
 begin
   if p_instance_id is null then return ng_private.error('INVALID_REQUEST','Instance required.'); end if;
@@ -259,6 +263,12 @@ begin
   select * into runtime from ng_private.runtime where singleton=true for update;
   if runtime.instance_id<>p_instance_id and runtime.lease_until>clock_timestamp() then return ng_private.error('SERVER_BUSY','Another game server holds the runtime lease.'); end if;
   update ng_private.runtime set instance_id=p_instance_id,lease_until=clock_timestamp()+interval '10 seconds' where singleton=true;
+  -- Verified live sockets keep their existing membership alive even when a browser tab is throttled.
+  -- This cannot recreate revoked membership or revive an already-stale member.
+  update public.ng_room_members m set last_seen_at=clock_timestamp()
+    from public.ng_rooms active_room join ng_private.matches active_match on active_match.id=active_room.current_match_id
+    where m.room_id=active_room.id and m.id=any(p_connected_members) and m.last_seen_at>clock_timestamp()-interval '30 seconds'
+      and active_room.status='IN_MATCH' and active_match.server_instance=p_instance_id;
   for r in select * from public.ng_rooms order by id for update loop
     if r.expires_at<=clock_timestamp() then delete from public.ng_rooms where id=r.id; continue; end if;
     delete from public.ng_room_members where room_id=r.id and last_seen_at<=clock_timestamp()-interval '30 seconds';
@@ -308,8 +318,8 @@ revoke all on all functions in schema ng_private from public, anon, authenticate
 grant execute on function ng_private.is_member(uuid) to authenticated;
 revoke all on function public.ng_create_room(uuid,text), public.ng_join_room(uuid,text,text),
   public.ng_set_ready(uuid,uuid,boolean,bigint),public.ng_leave_room(uuid,uuid),public.ng_request_start(uuid,uuid,bigint),
-  public.ng_return_lobby(uuid,uuid,bigint),public.ng_get_room(uuid),public.ng_server_tick(uuid) from public,anon,authenticated,service_role;
+  public.ng_return_lobby(uuid,uuid,bigint),public.ng_get_room(uuid),public.ng_server_tick(uuid,uuid[]) from public,anon,authenticated,service_role;
 grant execute on function public.ng_create_room(uuid,text),public.ng_join_room(uuid,text,text),
   public.ng_set_ready(uuid,uuid,boolean,bigint),public.ng_leave_room(uuid,uuid),public.ng_request_start(uuid,uuid,bigint),
   public.ng_return_lobby(uuid,uuid,bigint),public.ng_get_room(uuid) to authenticated;
-grant execute on function public.ng_server_tick(uuid) to service_role;
+grant execute on function public.ng_server_tick(uuid,uuid[]) to service_role;
