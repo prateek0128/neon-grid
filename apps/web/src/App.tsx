@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { RoomSnapshot } from '@neon/protocol';
-import { browserConfiguration, createBrowserAuth } from './auth';
+import { AuthenticationError, browserConfiguration, browserSession, createBrowserAuth, ensureBrowserIdentity } from './auth';
 import { RoomError, roomRpc } from './room-client';
 import { connectGame } from './connection';
 import type { ConnectionView } from './connection';
@@ -29,6 +29,7 @@ function RoomApp() {
   const socketCleanup = useRef<(() => void) | null>(null);
   const pollInFlight = useRef(false);
   const operationInFlight = useRef(false);
+  const authPollingPaused = useRef(false);
   const generation = useRef(0);
 
   function installRoom(next: RoomSnapshot | null) {
@@ -41,19 +42,18 @@ function RoomApp() {
   async function identity() {
     const config = browserConfiguration();
     auth.current ??= createBrowserAuth(config.url, config.key);
-    const existing = await auth.current.auth.getSession();
-    if (existing.error) throw existing.error;
-    if (!existing.data.session) {
-      const { error: authError } = await auth.current.auth.signInAnonymously();
-      if (authError) throw new Error(`Anonymous sign-in failed: ${authError.message}`);
-    }
+    await ensureBrowserIdentity(auth.current);
     return auth.current;
   }
   async function refresh() {
-    if (!auth.current || pollInFlight.current || operationInFlight.current) return;
+    if (!auth.current || authPollingPaused.current || pollInFlight.current || operationInFlight.current) return;
     pollInFlight.current = true;
     const currentGeneration = generation.current;
     try {
+      if (!await browserSession(auth.current)) {
+        if (roomRef.current) throw new AuthenticationError('Your session ended. Reload and try Create Room or Join Room again.');
+        return;
+      }
       const next = await roomRpc(auth.current, 'ng_get_room', { p_room_id: roomRef.current?.id ?? null });
       if (mounted.current && currentGeneration === generation.current && !operationInFlight.current) {
         if (!roomRef.current || !next || next.revision >= roomRef.current.revision) installRoom(next);
@@ -61,6 +61,7 @@ function RoomApp() {
       }
     } catch (cause) {
       if (!mounted.current || currentGeneration !== generation.current) return;
+      if (cause instanceof AuthenticationError) authPollingPaused.current = true;
       if (cause instanceof RoomError && ['NOT_MEMBER','ROOM_MISSING','ROOM_EXPIRED'].includes(cause.code)) {
         if (roomRef.current || sessionStorage.getItem('neon-grid-room')) setError(cause.message);
         installRoom(null); socketCleanup.current?.(); socketCleanup.current = null;
@@ -74,9 +75,15 @@ function RoomApp() {
       try {
         const config = browserConfiguration();
         auth.current ??= createBrowserAuth(config.url, config.key);
-        const { data } = await auth.current.auth.getSession();
-        if (data.session && !cancelled) await refresh();
-      } catch { /* Configuration errors are shown when the player invokes an action. */ }
+        auth.current.auth.startAutoRefresh();
+        const session = await browserSession(auth.current);
+        if (session && !cancelled) await refresh();
+      } catch (cause) {
+        if (!cancelled) {
+          authPollingPaused.current = true;
+          setError(cause instanceof Error ? cause.message : 'Session recovery failed. Please try again.');
+        }
+      }
       finally { if (!cancelled) setRecovering(false); }
     }
     void restore();
@@ -105,6 +112,7 @@ function RoomApp() {
     setBusy(true); setError('');
     try {
       const client = await identity();
+      authPollingPaused.current = false;
       let current = roomRef.current;
       if (!['create','join','leave'].includes(kind) && current) {
         current = await roomRpc(client, 'ng_get_room', { p_room_id: current.id });
@@ -123,6 +131,7 @@ function RoomApp() {
       const next = await roomRpc(client, rpcNames[kind], params);
       if (mounted.current) installRoom(next);
     } catch (cause) {
+      if (cause instanceof AuthenticationError) authPollingPaused.current = true;
       if (mounted.current) setError(cause instanceof Error ? cause.message : 'Request failed.');
       if (cause instanceof RoomError && cause.code === 'REVISION_CONFLICT' && auth.current) {
         try { const next = await roomRpc(auth.current, 'ng_get_room', { p_room_id: roomRef.current?.id }); if (mounted.current) installRoom(next); } catch { /* Keep the original error. */ }
