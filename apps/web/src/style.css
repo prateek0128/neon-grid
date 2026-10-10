@@ -67,3 +67,9 @@ input:focus { outline: 2px solid #56f0d0; outline-offset: 2px; }
 .movement-data { display: flex; justify-content: center; gap: 20px; font-size: 10px; color: #8292aa; flex-wrap: wrap; }
 .movement-data li { border: 0; padding: 5px; }
 @media(max-width:800px) { .landing { grid-template-columns:1fr; gap:10px; padding-top:0; } .landing-story { padding-bottom:0; } .landing-grid { display:none; } .room-bar { gap:12px; padding:15px; } .room-code { font-size:20px; } .room-state { margin-left:0; } }
+
+.player-score { display: flex; justify-content: space-between; gap: .75rem; margin: .65rem 0; font-size: .9rem; }
+.player-score span { color: #a8b4ca; }
+.local-score strong { color: #ffe786; }
+.collection-event { min-height: 1.5rem; color: #ffe786; font-size: .9rem; }
+.core-data { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }

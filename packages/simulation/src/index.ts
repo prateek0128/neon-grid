@@ -17,3 +17,4 @@ export function advancePosition(position: Vector, movement: Vector, deltaSeconds
 export function spawnPosition(slot: number): Vector {
   return { x: 320 + ((slot - 1) % 2) * 320, y: 220 + Math.floor((slot - 1) / 2) * 200 };
 }
+export * from './gameplay.ts';

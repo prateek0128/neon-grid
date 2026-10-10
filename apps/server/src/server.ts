@@ -4,12 +4,13 @@ import { performance } from 'node:perf_hooks';
 import { WebSocket, WebSocketServer } from 'ws';
 import { INPUT_TIMEOUT_MS, MAX_MESSAGE_BYTES, MAX_PLAYERS, PROTOCOL_VERSION, RECONNECT_GRACE_MS, SNAPSHOT_RATE, TICK_RATE, parseClientMessage } from '@neon/protocol';
 import type { ErrorCode, PlayerState, ServerMessage, Snapshot, Vector } from '@neon/protocol';
-import { advancePosition, spawnPosition } from '@neon/simulation';
+import { advanceGameplay, advancePosition, createGameplay, gameplaySnapshot, reconcileGameplay, spawnPosition } from '@neon/simulation';
+import type { GameplayPlayer, GameplayState } from '@neon/simulation';
 import type { VerifyToken } from './auth.ts';
 import type { RoomStore } from './rooms.ts';
 
 type Player = PlayerState & { userId: string; movement: Vector; lastInputAt: number; disconnectedAt: number | null; socket: WebSocket | null };
-type ArenaState = { id: string; roomId: string | null; players: Map<string, Player>; eligible: Map<string, { id: string; slot: number }> };
+type ArenaState = { id: string; roomId: string | null; players: Map<string, Player>; eligible: Map<string, { id: string; slot: number }>; gameplay?: GameplayState };
 type Connection = { player: Player | null; arena: ArenaState | null; sessionId: string; expiresAt: number; authenticating: boolean; tokens: number; rateAt: number; alive: boolean; authTimer: ReturnType<typeof setTimeout> };
 
 export function createGameServer(options: { verifyToken: VerifyToken; allowedOrigins: string[]; rooms?: RoomStore; allowTestArena?: boolean }) {
@@ -47,7 +48,16 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
     ws.close(code === 'SESSION_IN_USE' ? 4009 : 1008, code);
   }
   function snapshot(arena: ArenaState): Snapshot {
-    return { type: 'snapshot', version: PROTOCOL_VERSION, epoch: arena.id, tick, players: [...arena.players.values()].map(p => ({ id: p.id, slot: p.slot, position: { ...p.position }, connected: p.connected, lastSequence: p.lastSequence })) };
+    return { type: 'snapshot', version: PROTOCOL_VERSION, epoch: arena.id, tick, players: [...arena.players.values()].map(p => ({ id: p.id, slot: p.slot, position: { ...p.position }, connected: p.connected, lastSequence: p.lastSequence })),
+      ...(arena.gameplay ? { gameplay: gameplaySnapshot(arena.gameplay) } : {}) };
+  }
+  function gameplayPlayers(arena: ArenaState): GameplayPlayer[] {
+    return [...arena.eligible].map(([userId, member]) => {
+      const player = arena.players.get(userId);
+      const connection = player?.socket ? connections.get(player.socket) : null;
+      return { id: member.id, slot: member.slot, position: player?.position ?? spawnPosition(member.slot),
+        connected: !!(player?.connected && player.socket?.readyState === WebSocket.OPEN && connection?.expiresAt && connection.expiresAt > Date.now()) };
+    });
   }
   function broadcast() {
     const snapshots = new Map<string, Snapshot>();
@@ -74,7 +84,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
       for (const state of states) {
         let arena = arenas.get(state.matchId);
         if (!arena) {
-          arena = { id: state.matchId, roomId: state.roomId, players: new Map(), eligible: new Map() };
+          arena = { id: state.matchId, roomId: state.roomId, players: new Map(), eligible: new Map(), gameplay: createGameplay() };
           arenas.set(state.matchId, arena);
         }
         arena.eligible = new Map(state.members.map(m => [m.userId, { id: m.id, slot: m.slot }]));
@@ -82,6 +92,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
           if (player.socket) reject(player.socket, 'NOT_MEMBER', 'Room membership was revoked.');
           arena.players.delete(userId);
         }
+        reconcileGameplay(arena.gameplay!, gameplayPlayers(arena));
       }
       for (const [id, arena] of arenas) if (arena.roomId && !activeMatches.has(id)) {
         for (const player of arena.players.values()) if (player.socket) reject(player.socket, 'MATCH_UNAVAILABLE', 'Movement session ended. Return to the lobby.');
@@ -200,10 +211,14 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
     expireDisconnected(now);
     while (accumulator >= stepMs) {
       tick += 1;
-      for (const arena of arenas.values()) for (const player of arena.players.values()) {
-        if (arena.roomId && (!roomsHealthy || now - lastRoomSync > 5000)) player.movement = { x: 0, y: 0 };
-        if (!player.connected || player.socket?.readyState !== WebSocket.OPEN || now - player.lastInputAt > INPUT_TIMEOUT_MS) player.movement = { x: 0, y: 0 };
-        player.position = advancePosition(player.position, player.movement, 1 / TICK_RATE);
+      for (const arena of arenas.values()) {
+        const healthy = !arena.roomId || (roomsHealthy && now - lastRoomSync <= 5000);
+        for (const player of arena.players.values()) {
+          if (!healthy) player.movement = { x: 0, y: 0 };
+          if (!player.connected || player.socket?.readyState !== WebSocket.OPEN || now - player.lastInputAt > INPUT_TIMEOUT_MS) player.movement = { x: 0, y: 0 };
+          player.position = advancePosition(player.position, player.movement, 1 / TICK_RATE);
+        }
+        if (healthy && arena.gameplay) advanceGameplay(arena.gameplay, gameplayPlayers(arena));
       }
       accumulator -= stepMs;
       if (tick % (TICK_RATE / SNAPSHOT_RATE) === 0) broadcast();
@@ -228,6 +243,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
         send(ws, { type: 'error', version: PROTOCOL_VERSION, code: 'SERVER_CLOSING', message: 'Server restarting.' });
         ws.terminate();
       }
+      arenas.clear();
       await new Promise<void>(resolve => wss.close(() => resolve()));
       await new Promise<void>(resolve => http.close(() => resolve()));
     },

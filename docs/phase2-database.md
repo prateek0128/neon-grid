@@ -94,3 +94,7 @@ Follow README's two-client flow using real Supabase anonymous signup. Check that
 ## Local test limits
 
 `pnpm test` executes the full migration and real PostgreSQL RLS/function logic via PGlite, with fixture Auth schemas and roles. It does not replace production Supabase Auth/PostgREST verification. PGlite serializes database execution, so simultaneous caller promises exercise conflicting requests but do not prove multi-connection MVCC locking behavior. Native/live Postgres contention remains a required pre-release check. Browser tests use a test-only Auth and HTTP API fixture backed by the same migration.
+
+## Phase 3A database impact
+
+The user confirms this migration is applied to the dedicated project and Phase 2 live acceptance passed. Phase 3A adds no migration or grant/RLS changes. Active cores, scores, combos and collection events remain server memory owned by the existing match/runtime lease. No browser gameplay writes or extra RPC permissions are introduced.

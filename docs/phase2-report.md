@@ -93,3 +93,7 @@ Apply the migration only to a dedicated NEON GRID development project, enable an
 One persistent server replica; no horizontal scaling, prediction, touch controls or full gameplay. Room expiry is two hours, membership heartbeat 30 seconds, position grace 15 seconds; cleanup needs a running server. Auth revocation is checked at admission/renewal rather than continuously. Membership removal has a bounded reconciliation delay. No confirmed hosting blocker; detailed mission hosting restrictions remain unverified behind login. Render Web Service remains the proposed persistent host.
 
 Stopped after Phase 2. Await approval before Phase 3.
+
+## Subsequent verification and Phase 3A
+
+The Phase 3A request reports successful live Phase 2 testing against the dedicated Supabase project: two-session rooms, movement, host controls, reconnect and membership restrictions. This is user-reported verification after the historical local-only report above. Phase 3A preserves that foundation; its own fixture-backed checks are described in `phase3a-report.md` and are not live Supabase evidence.
