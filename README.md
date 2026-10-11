@@ -1,8 +1,8 @@
 # NEON GRID: CYBER HEIST
 
-Phase 3A: secure private rooms, lobby, authoritative multiplayer movement, energy-core collection and combo scoring. Later heist mechanics remain out of scope.
+Phase 3B: secure private rooms, lobby, authoritative multiplayer movement, core collection, combo scoring, Dash and Shield. Later heist mechanics remain out of scope.
 
-React/TypeScript/Vite renders the interface and Canvas 2D arena. Supabase Auth supplies anonymous identity; Postgres RPCs control durable room state. A separate persistent TypeScript WebSocket server independently activates matches and owns all movement, cores and scores. No sibling game's repository, backend or credentials are used.
+React/TypeScript/Vite renders the interface and Canvas 2D arena. Supabase Auth supplies anonymous identity; Postgres RPCs control durable room state. A separate persistent TypeScript WebSocket server independently activates matches and owns all movement, cores, scores and abilities. No sibling game's repository, backend or credentials are used.
 
 ## Local requirements and configuration
 
@@ -83,10 +83,16 @@ Rooms expire after two hours. Cleanup runs while the persistent server is runnin
 
 One server process owns a 10-second runtime lease. This phase does not support horizontal scaling. A replacement process aborts old sessions rather than reconstructing them. Movement position memory lasts 15 seconds after socket closure; the membership identity survives as long as room membership is valid. Auth is checked at socket admission/renewal and token expiration is enforced, but immediate Auth revocation between those checks is not implemented. The client makes one forced refresh attempt after an expired session error.
 
-No lasers, dash, shield, health, extraction, match results, round timer, additional arenas or deployment. Physical-device, non-Chromium and dedicated live-project testing remain required. See `docs/phase2-database.md`, `docs/architecture.md` and `docs/phase2-report.md`.
+No lasers, health, damage, extraction, match results, round timer, additional arenas or deployment. Physical-device, non-Chromium and dedicated live-project testing remain required. See `docs/phase2-database.md`, `docs/architecture.md` and `docs/phase2-report.md`.
 
 ## Phase 3A collection rules
 
 The existing 960×640 arena uses a 24×16 grid with 40-pixel cells and no interior walls. Eight gold cores occupy distinct valid cell centers, excluding player cells and body overlap. Move onto a core to collect it: the server checks a 22-pixel center distance after each 30 Hz movement step. Cores award 100 base points; consecutive pickups within five simulation seconds give 1×, then 2×, then 3×, capped at 3×. The multiplier and combo reset at the exact five-second deadline; points remain. Inactive cores respawn after two simulation seconds with fresh IDs and safe positions. Lower player slot wins an exact same-tick tie.
 
 The snapshot contains cores, authoritative scores/combos and the latest 16 ordered collection events. Clients send no collection or score messages. Scores survive socket reconnection while membership and the match remain active, including after the 15-second position grace; position may reset then. Return to Lobby, match abortion or server restart clears the run. See `docs/phase3a-report.md` for verification status, security details and the live two-browser checklist.
+
+## Phase 3B abilities
+
+Dash: **Space** or the HUD button. It uses the last accepted non-zero movement direction from the preceding second; move first if no direction is available. The burst lasts 0.2 simulation seconds at 3× speed (up to 126 pixels), with a five-second cooldown measured from activation. It stays inside the existing solid arena boundary and collects cores through the normal server proximity checks. Shield: **E** or the HUD button, active for two simulation seconds with a twelve-second cooldown from activation. It currently supplies defensive state and a synchronized ring; hazards/damage are reserved for Phase 3C.
+
+Cooldowns and shield state are owned by the server tick clock. Disconnect stops a dash but preserves its cooldown; shield/cooldowns continue while the match remains active and healthy. Reconnect restores current state, and a new match clears it. Controls ignore keyboard auto-repeat and editable fields. See `docs/phase3b-report.md` for protocol/security, test results and the live checklist.

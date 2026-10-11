@@ -57,6 +57,18 @@ export function Arena({ snapshot, playerId }: { snapshot: Snapshot | null; playe
         position.x += (player.position.x - position.x) * alpha;
         position.y += (player.position.y - position.y) * alpha;
         positions.set(player.id, position);
+        const ability = gameplay?.abilities?.find(a => a.id === player.id);
+        const dashEvent = gameplay?.abilityEvents?.findLast(e => e.playerId === player.id && e.ability === 'dash');
+        if (ability && gameplay && (gameplay.tick < ability.dashUntilTick || (dashEvent && gameplay.tick - dashEvent.tick < TICK_RATE * 0.35))) {
+          context!.strokeStyle = PLAYER_COLORS[player.slot - 1]!; context!.lineWidth = 8; context!.globalAlpha = 0.5;
+          context!.beginPath(); context!.moveTo(position.x, position.y);
+          context!.lineTo(position.x - ability.dashDirection.x * 45, position.y - ability.dashDirection.y * 45); context!.stroke();
+          context!.globalAlpha = 1;
+        }
+        if (ability && gameplay && gameplay.tick < ability.shieldUntilTick) {
+          context!.strokeStyle = '#80bdff'; context!.lineWidth = 3;
+          context!.beginPath(); context!.arc(position.x, position.y, ARENA.radius + 11, 0, Math.PI * 2); context!.stroke();
+        }
         context!.globalAlpha = player.connected ? 1 : 0.35;
         context!.fillStyle = PLAYER_COLORS[player.slot - 1]!;
         context!.beginPath();

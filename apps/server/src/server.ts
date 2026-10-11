@@ -2,14 +2,14 @@ import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { performance } from 'node:perf_hooks';
 import { WebSocket, WebSocketServer } from 'ws';
-import { INPUT_TIMEOUT_MS, MAX_MESSAGE_BYTES, MAX_PLAYERS, PROTOCOL_VERSION, RECONNECT_GRACE_MS, SNAPSHOT_RATE, TICK_RATE, parseClientMessage } from '@neon/protocol';
+import { ABILITY_RULES, INPUT_TIMEOUT_MS, MAX_MESSAGE_BYTES, MAX_PLAYERS, PROTOCOL_VERSION, RECONNECT_GRACE_MS, SNAPSHOT_RATE, TICK_RATE, parseClientMessage } from '@neon/protocol';
 import type { ErrorCode, PlayerState, ServerMessage, Snapshot, Vector } from '@neon/protocol';
-import { advanceGameplay, advancePosition, createGameplay, gameplaySnapshot, reconcileGameplay, spawnPosition } from '@neon/simulation';
+import { activateAbility, advanceAbilityPosition, advanceGameplay, advancePosition, cancelDash, createGameplay, gameplaySnapshot, reconcileGameplay, spawnPosition } from '@neon/simulation';
 import type { GameplayPlayer, GameplayState } from '@neon/simulation';
 import type { VerifyToken } from './auth.ts';
 import type { RoomStore } from './rooms.ts';
 
-type Player = PlayerState & { userId: string; movement: Vector; lastInputAt: number; disconnectedAt: number | null; socket: WebSocket | null };
+type Player = PlayerState & { userId: string; movement: Vector; lastInputAt: number; lastDirection: Vector | null; lastDirectionAt: number; disconnectedAt: number | null; socket: WebSocket | null };
 type ArenaState = { id: string; roomId: string | null; players: Map<string, Player>; eligible: Map<string, { id: string; slot: number }>; gameplay?: GameplayState };
 type Connection = { player: Player | null; arena: ArenaState | null; sessionId: string; expiresAt: number; authenticating: boolean; tokens: number; rateAt: number; alive: boolean; authTimer: ReturnType<typeof setTimeout> };
 
@@ -120,6 +120,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
         player.connected = false;
         player.movement = { x: 0, y: 0 };
         player.disconnectedAt = performance.now();
+        if (connection.arena?.gameplay) cancelDash(connection.arena.gameplay, player.id);
         broadcast();
       }
     });
@@ -175,7 +176,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
           if (players.size >= MAX_PLAYERS) { reject(ws, 'ARENA_FULL', 'The four-player test arena is full.'); return; }
           const usedSlots = new Set([...players.values()].map(p => p.slot));
           const slot = member?.slot ?? [1, 2, 3, 4].find(s => !usedSlots.has(s))!;
-          player = { id: member?.id ?? randomUUID(), userId: identity.userId, slot, position: spawnPosition(slot), connected: true, lastSequence: -1, movement: { x: 0, y: 0 }, lastInputAt: now, disconnectedAt: null, socket: ws };
+          player = { id: member?.id ?? randomUUID(), userId: identity.userId, slot, position: spawnPosition(slot), connected: true, lastSequence: -1, movement: { x: 0, y: 0 }, lastInputAt: now, lastDirection: null, lastDirectionAt: 0, disconnectedAt: null, socket: ws };
           players.set(identity.userId, player);
         }
         player.socket = ws;
@@ -183,6 +184,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
         player.disconnectedAt = null;
         player.movement = { x: 0, y: 0 };
         player.lastSequence = -1;
+        player.lastDirection = null;
         connection.player = player;
         connection.expiresAt = identity.expiresAt;
         clearTimeout(connection.authTimer);
@@ -195,8 +197,23 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
       if (connection.expiresAt <= Date.now() || message.sessionId !== connection.sessionId) { reject(ws, 'INVALID_SESSION', 'Session expired or incorrect.'); return; }
       if (message.sequence <= player.lastSequence) { reject(ws, 'STALE_SEQUENCE', 'Input sequence must increase.'); return; }
       player.lastSequence = message.sequence;
+      if (message.type === 'ability') {
+        const arena = connection.arena;
+        if (!arena?.roomId || !arena.gameplay || arenas.get(arena.id) !== arena) { reject(ws, 'MATCH_UNAVAILABLE', 'Abilities require an active room match.'); return; }
+        if (!roomsHealthy || now - lastRoomSync > 5000) { reject(ws, 'ROOM_UNAVAILABLE', 'Room authority unavailable.'); return; }
+        if (!player.connected || player.socket !== ws || arena.eligible.get(player.userId)?.id !== player.id) { reject(ws, 'NOT_MEMBER', 'Current membership is required.'); return; }
+        const direction = now - player.lastDirectionAt <= ABILITY_RULES.directionMemoryMs ? player.lastDirection : null;
+        const result = activateAbility(arena.gameplay, player.id, message.ability, player.position, direction);
+        if (result === 'NOT_MEMBER') { reject(ws, 'NOT_MEMBER', 'Current membership is required.'); return; }
+        if (result) send(ws, { type: 'ability_rejected', version: PROTOCOL_VERSION, ability: message.ability, reason: result });
+        else broadcast();
+        return;
+      }
       player.movement = message.movement;
       player.lastInputAt = now;
+      if (Math.hypot(message.movement.x, message.movement.y) > 0) {
+        player.lastDirection = { ...message.movement }; player.lastDirectionAt = now;
+      }
     });
   });
   const stepMs = 1000 / TICK_RATE;
@@ -216,7 +233,12 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
         for (const player of arena.players.values()) {
           if (!healthy) player.movement = { x: 0, y: 0 };
           if (!player.connected || player.socket?.readyState !== WebSocket.OPEN || now - player.lastInputAt > INPUT_TIMEOUT_MS) player.movement = { x: 0, y: 0 };
-          player.position = advancePosition(player.position, player.movement, 1 / TICK_RATE);
+          if (healthy && arena.gameplay && player.connected && player.socket?.readyState === WebSocket.OPEN) {
+            player.position = advanceAbilityPosition(arena.gameplay, player.id, player.position, player.movement);
+          } else {
+            if (arena.gameplay) cancelDash(arena.gameplay, player.id);
+            player.position = advancePosition(player.position, player.movement, 1 / TICK_RATE);
+          }
         }
         if (healthy && arena.gameplay) advanceGameplay(arena.gameplay, gameplayPlayers(arena));
       }

@@ -1,4 +1,4 @@
-import type { Vector } from '@neon/protocol';
+import type { AbilityKind, Vector } from '@neon/protocol';
 
 const movementCodes = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'ArrowRight']);
 export function movementFromKeys(keys: ReadonlySet<string>): Vector {
@@ -7,18 +7,27 @@ export function movementFromKeys(keys: ReadonlySet<string>): Vector {
     y: Number(keys.has('KeyS') || keys.has('ArrowDown')) - Number(keys.has('KeyW') || keys.has('ArrowUp')),
   };
 }
-export function attachKeyboard(onChange: (movement: Vector) => void) {
+export function attachKeyboard(onChange: (movement: Vector) => void, onAbility?: (ability: AbilityKind) => void) {
   const keys = new Set<string>();
+  const abilitiesHeld = new Set<string>();
   const change = (event: KeyboardEvent, down: boolean) => {
-    if (!movementCodes.has(event.code)) return;
     if (event.target instanceof HTMLElement && event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    if (onAbility && (event.code === 'Space' || event.code === 'KeyE')) {
+      event.preventDefault();
+      if (down) {
+        if (!event.repeat && !abilitiesHeld.has(event.code)) onAbility(event.code === 'Space' ? 'dash' : 'shield');
+        abilitiesHeld.add(event.code);
+      } else abilitiesHeld.delete(event.code);
+      return;
+    }
+    if (!movementCodes.has(event.code)) return;
     event.preventDefault();
     if (down) keys.add(event.code); else keys.delete(event.code);
     onChange(movementFromKeys(keys));
   };
   const down = (event: KeyboardEvent) => change(event, true);
   const up = (event: KeyboardEvent) => change(event, false);
-  const clear = () => { keys.clear(); onChange({ x: 0, y: 0 }); };
+  const clear = () => { keys.clear(); abilitiesHeld.clear(); onChange({ x: 0, y: 0 }); };
   const visibility = () => { if (document.hidden) clear(); };
   window.addEventListener('keydown', down);
   window.addEventListener('keyup', up);

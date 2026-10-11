@@ -112,3 +112,7 @@ docs/phase3a-report.md
 ```
 
 The previously tested authentication fix was committed separately as `d2ba9c5`. Existing user-created `supabase/config.toml` and `supabase/.gitignore` are left untouched and outside the Phase 3A commit. Dependency manifests and lockfile are unchanged.
+
+## Subsequent Phase 3B
+
+Phase 3B adds Dash and Shield within the same movement loop; see `phase3b-report.md`. Scoring and collection remain authoritative and unchanged. The client gains one activation-intent message; clients still cannot nominate movement results, collection results or score values. Collection and ability event arrays now share one monotonic event counter and one combined sixteen-event history budget. Phase 3A's test results and live-verification status above are historical.

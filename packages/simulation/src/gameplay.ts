@@ -1,14 +1,15 @@
 import { CORE_RULES } from '@neon/protocol';
-import type { CoreState, GameplaySnapshot, PlayerState } from '@neon/protocol';
+import type { AbilityEvent, AbilityState, CoreState, GameplaySnapshot, PlayerState } from '@neon/protocol';
 import { ARENA } from './index.ts';
 
 export { CORE_RULES } from '@neon/protocol';
 type Core = CoreState & { respawnAtTick: number };
-export type GameplayState = Omit<GameplaySnapshot, 'cores'> & { cores: Core[]; nextCore: number; nextEvent: number };
+export type GameplayState = Omit<GameplaySnapshot, 'cores' | 'abilities' | 'abilityEvents'> & {
+  cores: Core[]; abilities: AbilityState[]; abilityEvents: AbilityEvent[]; nextCore: number; nextEvent: number };
 export type GameplayPlayer = Pick<PlayerState, 'id' | 'slot' | 'position' | 'connected'>;
 
 export function createGameplay(): GameplayState {
-  return { tick: 0, cores: [], scores: [], events: [], nextCore: 1, nextEvent: 1 };
+  return { tick: 0, cores: [], scores: [], events: [], abilities: [], abilityEvents: [], nextCore: 1, nextEvent: 1 };
 }
 
 // The arena has no interior walls. Cell centers are inside its solid boundary.
@@ -34,6 +35,10 @@ function spawn(state: GameplayState, players: GameplayPlayer[], random: () => nu
 export function reconcileGameplay(state: GameplayState, players: GameplayPlayer[], random: () => number = Math.random) {
   const members = new Set(players.map(p => p.id));
   state.scores = state.scores.filter(s => members.has(s.id));
+  state.abilities = state.abilities.filter(s => members.has(s.id));
+  for (const player of players) if (!state.abilities.some(s => s.id === player.id)) {
+    state.abilities.push({ id: player.id, dashUntilTick: 0, dashReadyAtTick: 0, dashDirection: { x: 0, y: 0 }, shieldUntilTick: 0, shieldReadyAtTick: 0 });
+  }
   for (const player of [...players].sort((a, b) => a.slot - b.slot)) if (!state.scores.some(s => s.id === player.id)) {
     state.scores.push({ id: player.id, score: 0, combo: 0, multiplier: 1, comboExpiresAtTick: 0 });
   }
@@ -65,7 +70,7 @@ export function advanceGameplay(state: GameplayState, players: GameplayPlayer[],
     state.events.push({ sequence: state.nextEvent++, tick: state.tick, coreId: core.id, playerId: winner.id,
       position: { ...core.position }, points, multiplier: score.multiplier });
   }
-  state.events = state.events.slice(-CORE_RULES.eventLimit);
+  pruneGameplayEvents(state);
   for (let i = 0; i < state.cores.length; i++) if (!state.cores[i]!.active && state.tick >= state.cores[i]!.respawnAtTick) {
     const replacement = spawn(state, players, random);
     if (replacement) state.cores[i] = replacement;
@@ -74,5 +79,13 @@ export function advanceGameplay(state: GameplayState, players: GameplayPlayer[],
 
 export function gameplaySnapshot(state: GameplayState): GameplaySnapshot {
   return { tick: state.tick, cores: state.cores.map(c => ({ id: c.id, position: { ...c.position }, active: c.active })),
-    scores: state.scores.map(s => ({ ...s })), events: state.events.map(e => ({ ...e, position: { ...e.position } })) };
+    scores: state.scores.map(s => ({ ...s })), events: state.events.map(e => ({ ...e, position: { ...e.position } })),
+    abilities: state.abilities.map(a => ({ ...a, dashDirection: { ...a.dashDirection } })),
+    abilityEvents: state.abilityEvents.map(e => ({ ...e, position: { ...e.position }, direction: { ...e.direction } })) };
+}
+
+export function pruneGameplayEvents(state: GameplayState) {
+  const oldest = state.nextEvent - CORE_RULES.eventLimit;
+  state.events = state.events.filter(e => e.sequence >= oldest);
+  state.abilityEvents = state.abilityEvents.filter(e => e.sequence >= oldest);
 }

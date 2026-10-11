@@ -7,6 +7,9 @@ export const INPUT_TIMEOUT_MS = 250;
 export const RECONNECT_GRACE_MS = 15000;
 export const CORE_RULES = { cellSize: 40, count: 8, radius: 8, basePoints: 100, maxMultiplier: 3,
   comboWindowTicks: 5 * TICK_RATE, respawnTicks: 2 * TICK_RATE, eventLimit: 16 } as const;
+export const ABILITY_RULES = { dashDurationTicks: 6, dashCooldownTicks: 5 * TICK_RATE, dashSpeedMultiplier: 3,
+  directionMemoryMs: 1000, shieldDurationTicks: 2 * TICK_RATE, shieldCooldownTicks: 12 * TICK_RATE } as const;
+export type AbilityKind = 'dash' | 'shield';
 
 export type Vector = { x: number; y: number };
 export * from './rooms.ts';
@@ -14,20 +17,26 @@ export type Authenticate = { type: 'authenticate'; version: 1; accessToken: stri
 export type MovementInput = {
   type: 'input'; version: 1; sessionId: string; sequence: number; movement: Vector;
 };
-export type ClientMessage = Authenticate | MovementInput;
+export type AbilityRequest = { type: 'ability'; version: 1; sessionId: string; sequence: number; ability: AbilityKind };
+export type ClientMessage = Authenticate | MovementInput | AbilityRequest;
 export type PlayerState = {
   id: string; slot: number; position: Vector; connected: boolean; lastSequence: number;
 };
 export type CoreState = { id: string; position: Vector; active: boolean };
 export type ScoreState = { id: string; score: number; combo: number; multiplier: number; comboExpiresAtTick: number };
 export type CollectionEvent = { sequence: number; tick: number; coreId: string; playerId: string; position: Vector; points: number; multiplier: number };
-export type GameplaySnapshot = { tick: number; cores: CoreState[]; scores: ScoreState[]; events: CollectionEvent[] };
+export type AbilityState = { id: string; dashUntilTick: number; dashReadyAtTick: number; dashDirection: Vector;
+  shieldUntilTick: number; shieldReadyAtTick: number };
+export type AbilityEvent = { sequence: number; tick: number; playerId: string; ability: AbilityKind; position: Vector; direction: Vector };
+export type GameplaySnapshot = { tick: number; cores: CoreState[]; scores: ScoreState[]; events: CollectionEvent[];
+  abilities?: AbilityState[]; abilityEvents?: AbilityEvent[] };
 export type Snapshot = { type: 'snapshot'; version: 1; epoch: string; tick: number; players: PlayerState[]; gameplay?: GameplaySnapshot };
 export type ErrorCode = 'INVALID_MESSAGE' | 'AUTH_REQUIRED' | 'INVALID_SESSION' | 'AUTH_UNAVAILABLE' | 'SESSION_IN_USE' | 'ARENA_FULL' | 'STALE_SEQUENCE' | 'RATE_LIMITED' | 'SERVER_CLOSING' | 'ROOM_REQUIRED' | 'NOT_MEMBER' | 'MATCH_UNAVAILABLE' | 'ROOM_UNAVAILABLE';
 export type ProtocolError = { type: 'error'; version: 1; code: ErrorCode; message: string };
 export type Welcome = { type: 'welcome'; version: 1; playerId: string; sessionId: string; epoch: string; tickRate: number };
 export type Authenticated = { type: 'authenticated'; version: 1 };
-export type ServerMessage = Snapshot | ProtocolError | Welcome | Authenticated;
+export type AbilityRejected = { type: 'ability_rejected'; version: 1; ability: AbilityKind; reason: 'COOLDOWN' | 'NO_DIRECTION' };
+export type ServerMessage = Snapshot | ProtocolError | Welcome | Authenticated | AbilityRejected;
 
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -50,6 +59,9 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       typeof value.accessToken === 'string' && value.accessToken.length >= 20 && value.accessToken.length <= 4096) {
     return value as Authenticate;
   }
+  if (value.type === 'ability' && exactKeys(value, ['type', 'version', 'sessionId', 'sequence', 'ability']) &&
+      identifier(value.sessionId) && Number.isSafeInteger(value.sequence) && (value.sequence as number) >= 0 &&
+      (value.ability === 'dash' || value.ability === 'shield')) return value as AbilityRequest;
   if (value.type !== 'input' || !exactKeys(value, ['type', 'version', 'sessionId', 'sequence', 'movement']) ||
       !identifier(value.sessionId) || !Number.isSafeInteger(value.sequence) || (value.sequence as number) < 0 ||
       !object(value.movement) || !exactKeys(value.movement, ['x', 'y']) ||
@@ -64,6 +76,8 @@ export function parseServerMessage(raw: string): ServerMessage | null {
   if (!object(value) || value.version !== PROTOCOL_VERSION) return null;
   if (value.type === 'welcome' && identifier(value.playerId) && identifier(value.sessionId) && identifier(value.epoch) && value.tickRate === TICK_RATE) return value as Welcome;
   if (value.type === 'authenticated') return value as Authenticated;
+  if (value.type === 'ability_rejected' && exactKeys(value, ['type', 'version', 'ability', 'reason']) &&
+      (value.ability === 'dash' || value.ability === 'shield') && (value.reason === 'COOLDOWN' || value.reason === 'NO_DIRECTION')) return value as AbilityRejected;
   if (value.type === 'error' && typeof value.code === 'string' && typeof value.message === 'string') return value as ProtocolError;
   if (value.type !== 'snapshot' || !identifier(value.epoch) || !Number.isSafeInteger(value.tick) || (value.tick as number) < 0 ||
       !Array.isArray(value.players) || value.players.length > MAX_PLAYERS) return null;
@@ -105,5 +119,26 @@ function validGameplay(value: unknown): value is GameplaySnapshot {
         !coreId(event.coreId) || !identifier(event.playerId) || !position(event.position) || !multiplier(event.multiplier) || event.points !== CORE_RULES.basePoints * (event.multiplier as number)) return false;
     sequence = event.sequence;
   }
+  if (value.abilities !== undefined) {
+    if (!Array.isArray(value.abilities) || value.abilities.length > MAX_PLAYERS || !Array.isArray(value.abilityEvents) ||
+        value.abilityEvents.length + value.events.length > CORE_RULES.eventLimit) return false;
+    const abilityIds = new Set<string>();
+    const direction = (d: unknown) => object(d) && finite(d.x) && finite(d.y) && Math.hypot(d.x, d.y) <= 1.000001;
+    for (const ability of value.abilities) {
+      if (!object(ability) || !identifier(ability.id) || abilityIds.has(ability.id) || !scoreIds.has(ability.id) ||
+          !nonnegativeInteger(ability.dashUntilTick) || !nonnegativeInteger(ability.dashReadyAtTick) ||
+          !nonnegativeInteger(ability.shieldUntilTick) || !nonnegativeInteger(ability.shieldReadyAtTick) ||
+          ability.dashUntilTick > ability.dashReadyAtTick || ability.shieldUntilTick > ability.shieldReadyAtTick || !direction(ability.dashDirection)) return false;
+      abilityIds.add(ability.id);
+    }
+    const sequences = new Set(value.events.map(e => (e as CollectionEvent).sequence));
+    let previous = 0;
+    for (const event of value.abilityEvents) {
+      if (!object(event) || !nonnegativeInteger(event.sequence) || event.sequence <= previous || sequences.has(event.sequence) ||
+          !nonnegativeInteger(event.tick) || event.tick > value.tick || !identifier(event.playerId) ||
+          (event.ability !== 'dash' && event.ability !== 'shield') || !position(event.position) || !direction(event.direction)) return false;
+      previous = event.sequence;
+    }
+  } else if (value.abilityEvents !== undefined) return false;
   return true;
 }

@@ -1,9 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { PROTOCOL_VERSION, TICK_RATE, parseServerMessage } from '@neon/protocol';
-import type { Snapshot, Vector } from '@neon/protocol';
+import type { AbilityKind, Snapshot, Vector } from '@neon/protocol';
 import { attachKeyboard } from './keyboard';
 
-export type ConnectionView = { status: 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error'; detail: string; playerId: string | null; snapshot: Snapshot | null };
+export type ConnectionView = { status: 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error'; detail: string; playerId: string | null; snapshot: Snapshot | null; abilityNotice?: string };
 export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (view: ConnectionView) => void, room?: { roomId: string; matchId: string }) {
   let stopped = false;
   let socket: WebSocket | null = null;
@@ -23,7 +23,13 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
       socket.send(JSON.stringify({ type: 'input', version: PROTOCOL_VERSION, sessionId, sequence: sequence++, movement }));
     }
   }
-  const detachKeyboard = attachKeyboard(value => { movement = value; sendInput(); });
+  function sendAbility(ability: AbilityKind) {
+    if (!stopped && room && socket?.readyState === WebSocket.OPEN && sessionId && !terminal) {
+      socket.send(JSON.stringify({ type: 'ability', version: PROTOCOL_VERSION, sessionId, sequence: sequence++, ability }));
+      update({ abilityNotice: '' });
+    }
+  }
+  const detachKeyboard = attachKeyboard(value => { movement = value; sendInput(); }, room ? sendAbility : undefined);
   const inputTimer = setInterval(sendInput, 1000 / TICK_RATE);
   const { data: { subscription } } = auth.auth.onAuthStateChange((event, session) => {
     if (event === 'TOKEN_REFRESHED' && session && socket?.readyState === WebSocket.OPEN && sessionId) {
@@ -63,11 +69,13 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
           sessionId = message.sessionId;
           attempts = 0;
           authFailures = 0;
-          update({ status: 'connected', detail: 'Movement validated by the server', playerId: message.playerId, snapshot: null });
+          update({ status: 'connected', detail: 'Movement validated by the server', playerId: message.playerId, snapshot: null, abilityNotice: '' });
           sendInput();
         } else if (message.type === 'snapshot') {
           if (view.snapshot?.epoch === message.epoch && message.tick < view.snapshot.tick) return;
           update({ snapshot: message });
+        } else if (message.type === 'ability_rejected') {
+          update({ abilityNotice: message.reason === 'NO_DIRECTION' ? 'Move first, then Dash within one second.' : `${message.ability === 'dash' ? 'Dash' : 'Shield'} is cooling down.` });
         } else if (message.type === 'error') {
           terminal = !['SERVER_CLOSING', 'AUTH_UNAVAILABLE', 'ROOM_UNAVAILABLE'].includes(message.code);
           if (message.code === 'INVALID_SESSION' && authFailures++ === 0) {
@@ -93,7 +101,7 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
   }
   update({});
   void open();
-  return () => {
+  const cleanup = () => {
     // Send a final neutral input before detaching and closing.
     movement = { x: 0, y: 0 };
     sendInput();
@@ -105,4 +113,5 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
     if (connectionTimer) clearTimeout(connectionTimer);
     if (socket) { socket.onopen = null; socket.onmessage = null; socket.onerror = null; socket.onclose = null; socket.close(); }
   };
+  return Object.assign(cleanup, { activateAbility: sendAbility });
 }
