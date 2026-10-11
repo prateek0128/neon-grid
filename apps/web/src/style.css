@@ -77,3 +77,11 @@ input:focus { outline: 2px solid #56f0d0; outline-offset: 2px; }
 .ability-hud { padding: .85rem 1rem 0; }
 .ability-controls { display: flex; flex-wrap: wrap; gap: .6rem; }
 .ability-controls button { min-width: 10rem; flex: 1; }
+
+.health-hud { padding: .8rem 1rem 0; }
+.health-badge { display: grid; gap: .25rem; margin: .6rem 0; font-size: .8rem; color: #b9d9e4; }
+.health-badge meter { width: 100%; height: .65rem; accent-color: #56f0d0; }
+.health-badge.respawning { color: #ff8c9a; }
+.hazard-status, .damage-notice { min-height: 1.2rem; margin: .35rem 0; font-size: .85rem; }
+.hazard-status.warning { color: #ffc875; }
+.hazard-status.active, .damage-notice { color: #ff9aaa; }

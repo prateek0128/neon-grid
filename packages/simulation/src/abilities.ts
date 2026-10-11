@@ -3,10 +3,12 @@ import type { AbilityKind, Vector } from '@neon/protocol';
 import { advancePosition, normalizeMovement } from './index.ts';
 import { pruneGameplayEvents } from './gameplay.ts';
 import type { GameplayState } from './gameplay.ts';
+import { playerAlive } from './hazards.ts';
 
-export function activateAbility(state: GameplayState, playerId: string, ability: AbilityKind, position: Vector, direction: Vector | null): 'COOLDOWN' | 'NO_DIRECTION' | 'NOT_MEMBER' | null {
+export function activateAbility(state: GameplayState, playerId: string, ability: AbilityKind, position: Vector, direction: Vector | null): 'COOLDOWN' | 'NO_DIRECTION' | 'NOT_MEMBER' | 'DEAD' | null {
   const current = state.abilities.find(a => a.id === playerId);
   if (!current) return 'NOT_MEMBER';
+  if (!playerAlive(state, playerId)) return 'DEAD';
   if (ability === 'dash') {
     if (state.tick < current.dashReadyAtTick) return 'COOLDOWN';
     if (!direction || !Number.isFinite(direction.x) || !Number.isFinite(direction.y) ||
@@ -27,6 +29,7 @@ export function activateAbility(state: GameplayState, playerId: string, ability:
 }
 
 export function advanceAbilityPosition(state: GameplayState, playerId: string, position: Vector, movement: Vector) {
+  if (!playerAlive(state, playerId)) return { ...position };
   const ability = state.abilities.find(a => a.id === playerId);
   const dashing = ability && state.tick < ability.dashUntilTick;
   const direction = dashing ? ability.dashDirection : normalizeMovement(movement);

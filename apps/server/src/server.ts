@@ -4,7 +4,7 @@ import { performance } from 'node:perf_hooks';
 import { WebSocket, WebSocketServer } from 'ws';
 import { ABILITY_RULES, INPUT_TIMEOUT_MS, MAX_MESSAGE_BYTES, MAX_PLAYERS, PROTOCOL_VERSION, RECONNECT_GRACE_MS, SNAPSHOT_RATE, TICK_RATE, parseClientMessage } from '@neon/protocol';
 import type { ErrorCode, PlayerState, ServerMessage, Snapshot, Vector } from '@neon/protocol';
-import { activateAbility, advanceAbilityPosition, advanceGameplay, advancePosition, cancelDash, createGameplay, gameplaySnapshot, reconcileGameplay, spawnPosition } from '@neon/simulation';
+import { activateAbility, advanceAbilityPosition, advanceGameplay, advancePosition, cancelDash, createGameplay, gameplaySnapshot, playerAlive, reconcileGameplay, spawnPosition } from '@neon/simulation';
 import type { GameplayPlayer, GameplayState } from '@neon/simulation';
 import type { VerifyToken } from './auth.ts';
 import type { RoomStore } from './rooms.ts';
@@ -51,11 +51,11 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
     return { type: 'snapshot', version: PROTOCOL_VERSION, epoch: arena.id, tick, players: [...arena.players.values()].map(p => ({ id: p.id, slot: p.slot, position: { ...p.position }, connected: p.connected, lastSequence: p.lastSequence })),
       ...(arena.gameplay ? { gameplay: gameplaySnapshot(arena.gameplay) } : {}) };
   }
-  function gameplayPlayers(arena: ArenaState): GameplayPlayer[] {
+  function gameplayPlayers(arena: ArenaState, previousPositions?: Map<string, Vector>): GameplayPlayer[] {
     return [...arena.eligible].map(([userId, member]) => {
       const player = arena.players.get(userId);
       const connection = player?.socket ? connections.get(player.socket) : null;
-      return { id: member.id, slot: member.slot, position: player?.position ?? spawnPosition(member.slot),
+      return { id: member.id, slot: member.slot, position: player?.position ?? arena.gameplay?.vitals.find(v => v.id === member.id)?.respawnPosition ?? spawnPosition(member.slot), previousPosition: previousPositions?.get(member.id),
         connected: !!(player?.connected && player.socket?.readyState === WebSocket.OPEN && connection?.expiresAt && connection.expiresAt > Date.now()) };
     });
   }
@@ -176,7 +176,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
           if (players.size >= MAX_PLAYERS) { reject(ws, 'ARENA_FULL', 'The four-player test arena is full.'); return; }
           const usedSlots = new Set([...players.values()].map(p => p.slot));
           const slot = member?.slot ?? [1, 2, 3, 4].find(s => !usedSlots.has(s))!;
-          player = { id: member?.id ?? randomUUID(), userId: identity.userId, slot, position: spawnPosition(slot), connected: true, lastSequence: -1, movement: { x: 0, y: 0 }, lastInputAt: now, lastDirection: null, lastDirectionAt: 0, disconnectedAt: null, socket: ws };
+          player = { id: member?.id ?? randomUUID(), userId: identity.userId, slot, position: { ...(arena.gameplay?.vitals.find(v => v.id === member?.id)?.respawnPosition ?? spawnPosition(slot)) }, connected: true, lastSequence: -1, movement: { x: 0, y: 0 }, lastInputAt: now, lastDirection: null, lastDirectionAt: 0, disconnectedAt: null, socket: ws };
           players.set(identity.userId, player);
         }
         player.socket = ws;
@@ -209,6 +209,9 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
         else broadcast();
         return;
       }
+      if (connection.arena?.gameplay && !playerAlive(connection.arena.gameplay, player.id)) {
+        player.movement = { x: 0, y: 0 }; player.lastDirection = null; return;
+      }
       player.movement = message.movement;
       player.lastInputAt = now;
       if (Math.hypot(message.movement.x, message.movement.y) > 0) {
@@ -230,6 +233,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
       tick += 1;
       for (const arena of arenas.values()) {
         const healthy = !arena.roomId || (roomsHealthy && now - lastRoomSync <= 5000);
+        const previousPositions = new Map([...arena.players.values()].map(p => [p.id, { ...p.position }]));
         for (const player of arena.players.values()) {
           if (!healthy) player.movement = { x: 0, y: 0 };
           if (!player.connected || player.socket?.readyState !== WebSocket.OPEN || now - player.lastInputAt > INPUT_TIMEOUT_MS) player.movement = { x: 0, y: 0 };
@@ -240,7 +244,18 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
             player.position = advancePosition(player.position, player.movement, 1 / TICK_RATE);
           }
         }
-        if (healthy && arena.gameplay) advanceGameplay(arena.gameplay, gameplayPlayers(arena));
+        if (healthy && arena.gameplay) {
+          const currentPlayers = gameplayPlayers(arena, previousPositions);
+          advanceGameplay(arena.gameplay, currentPlayers);
+          for (const player of arena.players.values()) {
+            const current = currentPlayers.find(p => p.id === player.id);
+            if (current) {
+              const relocated = player.position !== current.position;
+              player.position = current.position;
+              if (relocated || !playerAlive(arena.gameplay, player.id)) { player.movement = { x: 0, y: 0 }; player.lastDirection = null; }
+            }
+          }
+        }
       }
       accumulator -= stepMs;
       if (tick % (TICK_RATE / SNAPSHOT_RATE) === 0) broadcast();

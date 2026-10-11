@@ -19,3 +19,4 @@ export function spawnPosition(slot: number): Vector {
 }
 export * from './gameplay.ts';
 export * from './abilities.ts';
+export * from './hazards.ts';

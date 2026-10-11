@@ -31,6 +31,19 @@ export function Arena({ snapshot, playerId }: { snapshot: Snapshot | null; playe
       context!.strokeStyle = '#395266';
       context!.strokeRect(1, 1, ARENA.width - 2, ARENA.height - 2);
       const gameplay = current.snapshot?.gameplay;
+      for (const laser of gameplay?.hazards ?? []) {
+        if (laser.phase === 'idle') continue;
+        const vertical = laser.axis === 'x';
+        context!.strokeStyle = laser.phase === 'warning' ? '#ffc875' : '#ff5274';
+        context!.lineWidth = laser.phase === 'warning' ? 2 : 10;
+        context!.setLineDash(laser.phase === 'warning' ? [10, 8] : []);
+        context!.beginPath(); context!.moveTo(vertical ? laser.coordinate : 0, vertical ? 0 : laser.coordinate);
+        context!.lineTo(vertical ? laser.coordinate : ARENA.width, vertical ? ARENA.height : laser.coordinate); context!.stroke();
+        context!.setLineDash([]);
+        context!.fillStyle = laser.phase === 'warning' ? '#ffc875' : '#ff9aaa';
+        context!.font = 'bold 12px system-ui'; context!.textAlign = 'left';
+        context!.fillText(laser.phase === 'warning' ? 'LASER WARNING' : 'ACTIVE LASER', vertical ? laser.coordinate + 12 : 16, vertical ? 30 : laser.coordinate - 10);
+      }
       for (const core of gameplay?.cores ?? []) {
         if (!core.active) continue;
         const { x, y } = core.position;
@@ -58,6 +71,18 @@ export function Arena({ snapshot, playerId }: { snapshot: Snapshot | null; playe
         position.y += (player.position.y - position.y) * alpha;
         positions.set(player.id, position);
         const ability = gameplay?.abilities?.find(a => a.id === player.id);
+        const vital = gameplay?.vitals?.find(v => v.id === player.id);
+        const healthEvent = gameplay?.healthEvents?.findLast(e => e.playerId === player.id && ['damage', 'shield_blocked', 'invulnerable_blocked'].includes(e.kind));
+        if (healthEvent && gameplay && gameplay.tick - healthEvent.tick < TICK_RATE * 0.7) {
+          context!.strokeStyle = healthEvent.kind === 'damage' ? '#ff5274' : '#b7dfff'; context!.lineWidth = 4;
+          context!.beginPath(); context!.arc(position.x, position.y, ARENA.radius + 16, 0, Math.PI * 2); context!.stroke();
+          context!.fillStyle = context!.strokeStyle; context!.font = 'bold 12px system-ui'; context!.textAlign = 'center';
+          context!.fillText(healthEvent.kind === 'damage' ? `−${healthEvent.amount} HP` : 'BLOCK', position.x, position.y + 40);
+        }
+        if (vital && gameplay && gameplay.tick < vital.invulnerableUntilTick) {
+          context!.strokeStyle = '#ffffff'; context!.lineWidth = 2; context!.setLineDash([4, 5]);
+          context!.beginPath(); context!.arc(position.x, position.y, ARENA.radius + 15, 0, Math.PI * 2); context!.stroke(); context!.setLineDash([]);
+        }
         const dashEvent = gameplay?.abilityEvents?.findLast(e => e.playerId === player.id && e.ability === 'dash');
         if (ability && gameplay && (gameplay.tick < ability.dashUntilTick || (dashEvent && gameplay.tick - dashEvent.tick < TICK_RATE * 0.35))) {
           context!.strokeStyle = PLAYER_COLORS[player.slot - 1]!; context!.lineWidth = 8; context!.globalAlpha = 0.5;
@@ -69,7 +94,7 @@ export function Arena({ snapshot, playerId }: { snapshot: Snapshot | null; playe
           context!.strokeStyle = '#80bdff'; context!.lineWidth = 3;
           context!.beginPath(); context!.arc(position.x, position.y, ARENA.radius + 11, 0, Math.PI * 2); context!.stroke();
         }
-        context!.globalAlpha = player.connected ? 1 : 0.35;
+        context!.globalAlpha = vital?.life === 'respawning' ? 0.2 : player.connected ? 1 : 0.35;
         context!.fillStyle = PLAYER_COLORS[player.slot - 1]!;
         context!.beginPath();
         context!.arc(position.x, position.y, ARENA.radius, 0, Math.PI * 2);
@@ -79,7 +104,8 @@ export function Arena({ snapshot, playerId }: { snapshot: Snapshot | null; playe
           context!.beginPath(); context!.arc(position.x, position.y, ARENA.radius + 5, 0, Math.PI * 2); context!.stroke();
         }
         context!.font = 'bold 14px system-ui'; context!.textAlign = 'center';
-        context!.fillText(`P${player.slot}${player.id === current.playerId ? ' · YOU' : ''}`, position.x, position.y - 28);
+        context!.globalAlpha = 1;
+        context!.fillText(vital?.life === 'respawning' && gameplay ? `RESPAWN ${Math.max(0, Math.ceil((vital.respawnAtTick - gameplay.tick) / TICK_RATE))}s` : `P${player.slot}${player.id === current.playerId ? ' · YOU' : ''}`, position.x, position.y - 28);
         context!.globalAlpha = 1;
       }
       frame = requestAnimationFrame(render);

@@ -75,3 +75,30 @@ it('validates ability state and cross-event sequence ordering', () => {
     { ...gameplay, events: [{ sequence: 1, tick: 0, coreId: 'core-1', playerId: input.sessionId, position: { x: 20, y: 20 }, points: 100, multiplier: 1 }] },
   ]) expect(parseServerMessage(JSON.stringify({ ...snapshot, gameplay: invalid }))).toBeNull();
 });
+
+it.each(['health', 'damage', 'life', 'respawnAtTick', 'invulnerableUntilTick', 'collision', 'respawnPosition'])('rejects forged client lifecycle field %s', field => {
+  for (const message of [input, ability]) expect(parseClientMessage(JSON.stringify({ ...message, [field]: 999 }))).toBeNull();
+});
+it.each(['damage', 'death', 'respawn', 'collision'])('rejects client outcome message %s', type => {
+  expect(parseClientMessage(JSON.stringify({ ...input, type }))).toBeNull();
+});
+
+it('rejects inconsistent health, lifecycle, hazard timing and duplicate event sequences', () => {
+  const vital = { id: input.sessionId, health: 50, life: 'alive', respawnAtTick: 0, invulnerableUntilTick: 0, respawnPosition: { x: 320, y: 220 } };
+  const laser = { id: 'laser-1', axis: 'y', coordinate: 220, phase: 'active', warningAtTick: 180, activeAtTick: 225, endsAtTick: 255 };
+  const event = { sequence: 1, tick: 225, playerId: input.sessionId, kind: 'damage', hazardId: 'laser-1', health: 50, amount: 50, position: { x: 320, y: 220 } };
+  const gameplay = { tick: 225, cores: [], scores: [{ id: input.sessionId, score: 0, combo: 0, multiplier: 1, comboExpiresAtTick: 0 }], events: [], vitals: [vital], hazards: [laser], healthEvents: [event] };
+  const envelope = { type: 'snapshot', version: 1, epoch: input.sessionId, tick: 225, players: [] };
+  expect(parseServerMessage(JSON.stringify({ ...envelope, gameplay }))).not.toBeNull();
+  for (const invalid of [
+    { ...gameplay, vitals: [{ ...vital, health: -1 }] },
+    { ...gameplay, vitals: [{ ...vital, health: 101 }] },
+    { ...gameplay, vitals: [{ ...vital, health: 0 }] },
+    { ...gameplay, vitals: [{ ...vital, life: 'respawning' }] },
+    { ...gameplay, vitals: [{ ...vital, respawnPosition: { x: 1000, y: 220 } }] },
+    { ...gameplay, hazards: [{ ...laser, phase: 'warning' }] },
+    { ...gameplay, hazards: [{ ...laser, endsAtTick: 256 }] },
+    { ...gameplay, healthEvents: [event, event] },
+    { ...gameplay, healthEvents: [{ ...event, amount: 100 }] },
+  ]) expect(parseServerMessage(JSON.stringify({ ...envelope, gameplay: invalid }))).toBeNull();
+});

@@ -75,7 +75,7 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
           if (view.snapshot?.epoch === message.epoch && message.tick < view.snapshot.tick) return;
           update({ snapshot: message });
         } else if (message.type === 'ability_rejected') {
-          update({ abilityNotice: message.reason === 'NO_DIRECTION' ? 'Move first, then Dash within one second.' : `${message.ability === 'dash' ? 'Dash' : 'Shield'} is cooling down.` });
+          update({ abilityNotice: message.reason === 'DEAD' ? 'Respawning. Abilities return when you are alive.' : message.reason === 'NO_DIRECTION' ? 'Move first, then Dash within one second.' : `${message.ability === 'dash' ? 'Dash' : 'Shield'} is cooling down.` });
         } else if (message.type === 'error') {
           terminal = !['SERVER_CLOSING', 'AUTH_UNAVAILABLE', 'ROOM_UNAVAILABLE'].includes(message.code);
           if (message.code === 'INVALID_SESSION' && authFailures++ === 0) {

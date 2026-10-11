@@ -1,15 +1,17 @@
-import { CORE_RULES } from '@neon/protocol';
-import type { AbilityEvent, AbilityState, CoreState, GameplaySnapshot, PlayerState } from '@neon/protocol';
-import { ARENA } from './index.ts';
+import { CORE_RULES, HAZARD_RULES } from '@neon/protocol';
+import type { AbilityEvent, AbilityState, CoreState, GameplaySnapshot, HealthEvent, LaserState, PlayerState, PlayerVitals, Vector } from '@neon/protocol';
+import { ARENA, spawnPosition } from './index.ts';
+import { advanceHazards, laserAtTick, playerAlive } from './hazards.ts';
 
 export { CORE_RULES } from '@neon/protocol';
 type Core = CoreState & { respawnAtTick: number };
-export type GameplayState = Omit<GameplaySnapshot, 'cores' | 'abilities' | 'abilityEvents'> & {
-  cores: Core[]; abilities: AbilityState[]; abilityEvents: AbilityEvent[]; nextCore: number; nextEvent: number };
-export type GameplayPlayer = Pick<PlayerState, 'id' | 'slot' | 'position' | 'connected'>;
+export type GameplayState = Omit<GameplaySnapshot, 'cores' | 'abilities' | 'abilityEvents' | 'vitals' | 'hazards' | 'healthEvents'> & {
+  cores: Core[]; abilities: AbilityState[]; abilityEvents: AbilityEvent[]; vitals: PlayerVitals[]; hazards: LaserState[];
+  healthEvents: HealthEvent[]; hazardHits: Map<string, string>; nextCore: number; nextEvent: number };
+export type GameplayPlayer = Pick<PlayerState, 'id' | 'slot' | 'position' | 'connected'> & { previousPosition?: Vector };
 
 export function createGameplay(): GameplayState {
-  return { tick: 0, cores: [], scores: [], events: [], abilities: [], abilityEvents: [], nextCore: 1, nextEvent: 1 };
+  return { tick: 0, cores: [], scores: [], events: [], abilities: [], abilityEvents: [], vitals: [], hazards: [laserAtTick(0)], healthEvents: [], hazardHits: new Map(), nextCore: 1, nextEvent: 1 };
 }
 
 // The arena has no interior walls. Cell centers are inside its solid boundary.
@@ -36,6 +38,11 @@ export function reconcileGameplay(state: GameplayState, players: GameplayPlayer[
   const members = new Set(players.map(p => p.id));
   state.scores = state.scores.filter(s => members.has(s.id));
   state.abilities = state.abilities.filter(s => members.has(s.id));
+  state.vitals = state.vitals.filter(s => members.has(s.id));
+  for (const id of state.hazardHits.keys()) if (!members.has(id)) state.hazardHits.delete(id);
+  for (const player of players) if (!state.vitals.some(v => v.id === player.id)) {
+    state.vitals.push({ id: player.id, health: HAZARD_RULES.maxHealth, life: 'alive', respawnAtTick: 0, invulnerableUntilTick: 0, respawnPosition: spawnPosition(player.slot) });
+  }
   for (const player of players) if (!state.abilities.some(s => s.id === player.id)) {
     state.abilities.push({ id: player.id, dashUntilTick: 0, dashReadyAtTick: 0, dashDirection: { x: 0, y: 0 }, shieldUntilTick: 0, shieldReadyAtTick: 0 });
   }
@@ -51,11 +58,12 @@ export function reconcileGameplay(state: GameplayState, players: GameplayPlayer[
 
 export function advanceGameplay(state: GameplayState, players: GameplayPlayer[], random: () => number = Math.random) {
   state.tick++;
+  advanceHazards(state, players);
   for (const score of state.scores) if (score.combo && state.tick >= score.comboExpiresAtTick) {
     score.combo = 0; score.multiplier = 1; score.comboExpiresAtTick = 0;
   }
   // Stable slot order decides ties; each core is marked inactive before another can win it.
-  const connected = players.filter(p => p.connected).sort((a, b) => a.slot - b.slot || a.id.localeCompare(b.id));
+  const connected = players.filter(p => p.connected && playerAlive(state, p.id)).sort((a, b) => a.slot - b.slot || a.id.localeCompare(b.id));
   for (const core of state.cores) {
     if (!core.active) continue;
     const winner = connected.find(p => state.scores.some(s => s.id === p.id) &&
@@ -81,11 +89,14 @@ export function gameplaySnapshot(state: GameplayState): GameplaySnapshot {
   return { tick: state.tick, cores: state.cores.map(c => ({ id: c.id, position: { ...c.position }, active: c.active })),
     scores: state.scores.map(s => ({ ...s })), events: state.events.map(e => ({ ...e, position: { ...e.position } })),
     abilities: state.abilities.map(a => ({ ...a, dashDirection: { ...a.dashDirection } })),
-    abilityEvents: state.abilityEvents.map(e => ({ ...e, position: { ...e.position }, direction: { ...e.direction } })) };
+    abilityEvents: state.abilityEvents.map(e => ({ ...e, position: { ...e.position }, direction: { ...e.direction } })),
+    vitals: state.vitals.map(v => ({ ...v, respawnPosition: { ...v.respawnPosition } })), hazards: state.hazards.map(h => ({ ...h })),
+    healthEvents: state.healthEvents.map(e => ({ ...e, position: { ...e.position } })) };
 }
 
 export function pruneGameplayEvents(state: GameplayState) {
   const oldest = state.nextEvent - CORE_RULES.eventLimit;
   state.events = state.events.filter(e => e.sequence >= oldest);
   state.abilityEvents = state.abilityEvents.filter(e => e.sequence >= oldest);
+  state.healthEvents = state.healthEvents.filter(e => e.sequence >= oldest);
 }

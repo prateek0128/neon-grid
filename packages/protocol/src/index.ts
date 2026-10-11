@@ -10,6 +10,9 @@ export const CORE_RULES = { cellSize: 40, count: 8, radius: 8, basePoints: 100, 
 export const ABILITY_RULES = { dashDurationTicks: 6, dashCooldownTicks: 5 * TICK_RATE, dashSpeedMultiplier: 3,
   directionMemoryMs: 1000, shieldDurationTicks: 2 * TICK_RATE, shieldCooldownTicks: 12 * TICK_RATE } as const;
 export type AbilityKind = 'dash' | 'shield';
+export const HAZARD_RULES = { maxHealth: 100, damage: 50, initialDelayTicks: 6 * TICK_RATE,
+  warningTicks: 45, activeTicks: TICK_RATE, intervalTicks: 4 * TICK_RATE, halfWidth: 5,
+  respawnTicks: 3 * TICK_RATE, invulnerabilityTicks: 45 } as const;
 
 export type Vector = { x: number; y: number };
 export * from './rooms.ts';
@@ -28,14 +31,17 @@ export type CollectionEvent = { sequence: number; tick: number; coreId: string; 
 export type AbilityState = { id: string; dashUntilTick: number; dashReadyAtTick: number; dashDirection: Vector;
   shieldUntilTick: number; shieldReadyAtTick: number };
 export type AbilityEvent = { sequence: number; tick: number; playerId: string; ability: AbilityKind; position: Vector; direction: Vector };
+export type LaserState = { id: string; axis: 'x' | 'y'; coordinate: number; phase: 'idle' | 'warning' | 'active'; warningAtTick: number; activeAtTick: number; endsAtTick: number };
+export type PlayerVitals = { id: string; health: number; life: 'alive' | 'respawning'; respawnAtTick: number; invulnerableUntilTick: number; respawnPosition: Vector };
+export type HealthEvent = { sequence: number; tick: number; playerId: string; kind: 'damage' | 'shield_blocked' | 'invulnerable_blocked' | 'death' | 'respawn'; hazardId: string | null; position: Vector; health: number; amount: number };
 export type GameplaySnapshot = { tick: number; cores: CoreState[]; scores: ScoreState[]; events: CollectionEvent[];
-  abilities?: AbilityState[]; abilityEvents?: AbilityEvent[] };
+  abilities?: AbilityState[]; abilityEvents?: AbilityEvent[]; hazards?: LaserState[]; vitals?: PlayerVitals[]; healthEvents?: HealthEvent[] };
 export type Snapshot = { type: 'snapshot'; version: 1; epoch: string; tick: number; players: PlayerState[]; gameplay?: GameplaySnapshot };
 export type ErrorCode = 'INVALID_MESSAGE' | 'AUTH_REQUIRED' | 'INVALID_SESSION' | 'AUTH_UNAVAILABLE' | 'SESSION_IN_USE' | 'ARENA_FULL' | 'STALE_SEQUENCE' | 'RATE_LIMITED' | 'SERVER_CLOSING' | 'ROOM_REQUIRED' | 'NOT_MEMBER' | 'MATCH_UNAVAILABLE' | 'ROOM_UNAVAILABLE';
 export type ProtocolError = { type: 'error'; version: 1; code: ErrorCode; message: string };
 export type Welcome = { type: 'welcome'; version: 1; playerId: string; sessionId: string; epoch: string; tickRate: number };
 export type Authenticated = { type: 'authenticated'; version: 1 };
-export type AbilityRejected = { type: 'ability_rejected'; version: 1; ability: AbilityKind; reason: 'COOLDOWN' | 'NO_DIRECTION' };
+export type AbilityRejected = { type: 'ability_rejected'; version: 1; ability: AbilityKind; reason: 'COOLDOWN' | 'NO_DIRECTION' | 'DEAD' };
 export type ServerMessage = Snapshot | ProtocolError | Welcome | Authenticated | AbilityRejected;
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -77,7 +83,7 @@ export function parseServerMessage(raw: string): ServerMessage | null {
   if (value.type === 'welcome' && identifier(value.playerId) && identifier(value.sessionId) && identifier(value.epoch) && value.tickRate === TICK_RATE) return value as Welcome;
   if (value.type === 'authenticated') return value as Authenticated;
   if (value.type === 'ability_rejected' && exactKeys(value, ['type', 'version', 'ability', 'reason']) &&
-      (value.ability === 'dash' || value.ability === 'shield') && (value.reason === 'COOLDOWN' || value.reason === 'NO_DIRECTION')) return value as AbilityRejected;
+      (value.ability === 'dash' || value.ability === 'shield') && typeof value.reason === 'string' && ['COOLDOWN', 'NO_DIRECTION', 'DEAD'].includes(value.reason)) return value as AbilityRejected;
   if (value.type === 'error' && typeof value.code === 'string' && typeof value.message === 'string') return value as ProtocolError;
   if (value.type !== 'snapshot' || !identifier(value.epoch) || !Number.isSafeInteger(value.tick) || (value.tick as number) < 0 ||
       !Array.isArray(value.players) || value.players.length > MAX_PLAYERS) return null;
@@ -140,5 +146,34 @@ function validGameplay(value: unknown): value is GameplaySnapshot {
       previous = event.sequence;
     }
   } else if (value.abilityEvents !== undefined) return false;
+  if (value.vitals !== undefined) {
+    if (!Array.isArray(value.vitals) || value.vitals.length > MAX_PLAYERS || !Array.isArray(value.hazards) || value.hazards.length > 1 || !Array.isArray(value.healthEvents) ||
+        value.healthEvents.length + value.events.length + (Array.isArray(value.abilityEvents) ? value.abilityEvents.length : 0) > CORE_RULES.eventLimit) return false;
+    const vitalIds = new Set<string>();
+    for (const vital of value.vitals) {
+      if (!object(vital) || !identifier(vital.id) || vitalIds.has(vital.id) || !scoreIds.has(vital.id) || !nonnegativeInteger(vital.health) || vital.health > HAZARD_RULES.maxHealth ||
+          (vital.life !== 'alive' && vital.life !== 'respawning') || (vital.life === 'respawning' ? vital.health !== 0 : vital.health === 0) ||
+          !nonnegativeInteger(vital.respawnAtTick) || (vital.life === 'respawning' ? vital.respawnAtTick <= value.tick : vital.respawnAtTick !== 0) ||
+          !nonnegativeInteger(vital.invulnerableUntilTick) || !position(vital.respawnPosition)) return false;
+      vitalIds.add(vital.id);
+    }
+    const laserId = (id: unknown) => typeof id === 'string' && /^laser-[1-9]\d{0,14}$/.test(id);
+    for (const laser of value.hazards) {
+      if (!object(laser) || !laserId(laser.id) || (laser.axis !== 'x' && laser.axis !== 'y') || !finite(laser.coordinate) || laser.coordinate < 0 ||
+          laser.coordinate > (laser.axis === 'x' ? 960 : 640) || !nonnegativeInteger(laser.warningAtTick) || !nonnegativeInteger(laser.activeAtTick) || !nonnegativeInteger(laser.endsAtTick) ||
+          laser.activeAtTick - laser.warningAtTick !== HAZARD_RULES.warningTicks || laser.endsAtTick - laser.activeAtTick !== HAZARD_RULES.activeTicks) return false;
+      const phase = value.tick < laser.warningAtTick || value.tick >= laser.endsAtTick ? 'idle' : value.tick < laser.activeAtTick ? 'warning' : 'active';
+      if (laser.phase !== phase) return false;
+    }
+    const sequences = new Set([...value.events, ...(Array.isArray(value.abilityEvents) ? value.abilityEvents : [])].map(e => (e as CollectionEvent).sequence));
+    let previous = 0;
+    for (const event of value.healthEvents) {
+      if (!object(event) || !nonnegativeInteger(event.sequence) || event.sequence <= previous || sequences.has(event.sequence) || !nonnegativeInteger(event.tick) || event.tick > value.tick ||
+          !identifier(event.playerId) || typeof event.kind !== 'string' || !['damage', 'shield_blocked', 'invulnerable_blocked', 'death', 'respawn'].includes(event.kind) ||
+          (event.hazardId !== null && !laserId(event.hazardId)) || !position(event.position) || !nonnegativeInteger(event.health) || event.health > HAZARD_RULES.maxHealth ||
+          !nonnegativeInteger(event.amount) || event.amount > HAZARD_RULES.damage || (event.kind !== 'damage' && event.amount !== 0)) return false;
+      previous = event.sequence;
+    }
+  } else if (value.hazards !== undefined || value.healthEvents !== undefined) return false;
   return true;
 }
