@@ -19,9 +19,10 @@ export function HealthHud({ gameplay, playerId }: { gameplay: GameplaySnapshot |
   const hazard = gameplay?.hazards?.[0];
   return <div className="health-hud">
     <HealthBadge vital={vital} tick={gameplay?.tick ?? 0} />
-    <p className={`hazard-status ${hazard?.phase ?? ''}`} role="status" data-testid="hazard-status" data-phase={hazard?.phase ?? 'idle'} data-hazard-id={hazard?.id ?? ''}>
-      {hazard?.phase === 'warning' ? `Laser warning · ${Math.max(1, Math.ceil((hazard.activeAtTick - (gameplay?.tick ?? 0)) / TICK_RATE))}s` : hazard?.phase === 'active' ? 'Laser active · avoid the red beam' : 'Security grid scanning'}
+    <p className={`hazard-status ${hazard?.phase ?? ''}`} role="status" data-testid="hazard-status" data-stage={gameplay?.difficultyStage ?? 1} data-coordinate={hazard?.coordinate ?? ''} data-moving={!!hazard?.motion} data-phase={hazard?.phase ?? 'idle'} data-hazard-id={hazard?.id ?? ''}>
+      {hazard?.phase === 'warning' ? `${hazard.motion ? 'Sweep warning' : 'Laser warning'} · ${Math.max(1, Math.ceil((hazard.activeAtTick - (gameplay?.tick ?? 0)) / TICK_RATE))}s` : hazard?.phase === 'active' ? hazard.motion ? 'Moving laser · dodge the sweep' : 'Laser active · avoid the red beam' : 'Security grid scanning'}
     </p>
+    <p className="small" data-testid="difficulty-stage">Security pressure · stage {gameplay?.difficultyStage ?? 1}/3</p>
     <p className="damage-notice" role="status" data-testid="damage-notice">{recent ? recent.kind === 'damage' ? `Hit · −${recent.amount} HP` : recent.kind === 'shield_blocked' ? 'Shield blocked the laser' : recent.kind === 'invulnerable_blocked' ? 'Respawn protection blocked the laser' : recent.kind === 'death' ? 'Down · respawning shortly' : 'Respawned · temporary protection' : 'Warnings mark the next laser. Shield blocks its hit.'}</p>
   </div>;
 }

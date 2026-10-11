@@ -13,7 +13,7 @@ export type GameplayPlayer = Pick<PlayerState, 'id' | 'slot' | 'position' | 'con
 export function createGameplay(durationTicks: number = MATCH_RULES.durationTicks, generationId: string = crypto.randomUUID(), extractionWindowTicks: number = EXTRACTION_RULES.windowTicks): GameplayState {
   if (!Number.isSafeInteger(durationTicks) || durationTicks < 1) throw new Error('Match duration must be a positive number of ticks.');
   if (!Number.isSafeInteger(extractionWindowTicks) || extractionWindowTicks < 1) throw new Error('Extraction window must be positive ticks.');
-  return { extraction: { phase: durationTicks <= extractionWindowTicks ? 'open' : 'closed', opensAtTick: Math.max(0, durationTicks - extractionWindowTicks), closesAtTick: durationTicks, remainingTicks: durationTicks, zone: { ...EXTRACTION_RULES.zone }, players: [] }, match: { id: generationId, phase: 'ACTIVE', durationTicks, endedAtTick: null, results: null }, participants: new Map(), tick: 0, cores: [], scores: [], events: [], abilities: [], abilityEvents: [], vitals: [], hazards: [laserAtTick(0)], healthEvents: [], hazardHits: new Map(), nextCore: 1, nextEvent: 1 };
+  return { difficultyStage: 1, extraction: { phase: durationTicks <= extractionWindowTicks ? 'open' : 'closed', opensAtTick: Math.max(0, durationTicks - extractionWindowTicks), closesAtTick: durationTicks, remainingTicks: durationTicks, zone: { ...EXTRACTION_RULES.zone }, players: [] }, match: { id: generationId, phase: 'ACTIVE', durationTicks, endedAtTick: null, results: null }, participants: new Map(), tick: 0, cores: [], scores: [], events: [], abilities: [], abilityEvents: [], vitals: [], hazards: [laserAtTick(0)], healthEvents: [], hazardHits: new Map(), nextCore: 1, nextEvent: 1 };
 }
 
 // The arena has no interior walls. Cell centers are inside its solid boundary.
@@ -109,7 +109,7 @@ export function advanceGameplay(state: GameplayState, players: GameplayPlayer[],
 }
 
 export function gameplaySnapshot(state: GameplayState): GameplaySnapshot {
-  return { extraction: structuredClone(state.extraction), match: structuredClone(state.match), tick: state.tick, cores: state.cores.map(c => ({ id: c.id, position: { ...c.position }, active: c.active })),
+  return { difficultyStage: state.difficultyStage, extraction: structuredClone(state.extraction), match: structuredClone(state.match), tick: state.tick, cores: state.cores.map(c => ({ id: c.id, position: { ...c.position }, active: c.active })),
     scores: state.scores.map(s => ({ ...s })), events: state.events.map(e => ({ ...e, position: { ...e.position } })),
     abilities: state.abilities.map(a => ({ ...a, dashDirection: { ...a.dashDirection } })),
     abilityEvents: state.abilityEvents.map(e => ({ ...e, position: { ...e.position }, direction: { ...e.direction } })),

@@ -14,6 +14,7 @@ export const HAZARD_RULES = { maxHealth: 100, damage: 50, initialDelayTicks: 6 *
   warningTicks: 45, activeTicks: TICK_RATE, intervalTicks: 4 * TICK_RATE, halfWidth: 5,
   respawnTicks: 3 * TICK_RATE, invulnerabilityTicks: 45 } as const;
 
+export const DIFFICULTY_RULES = { stage2Tick: 30 * TICK_RATE, stage3Tick: 60 * TICK_RATE, movingActiveTicks: 2 * TICK_RATE, stage2IntervalTicks: 4 * TICK_RATE, stage3IntervalTicks: 105, stage2Speed: 160, stage3Speed: 200, margin: 40 } as const;
 export const EXTRACTION_RULES = { windowTicks: 20 * TICK_RATE, zone: { x: 480, y: 320, radius: 60 } } as const;
 export type ExtractionOutcome = 'alive' | 'extracted' | 'locked_down' | 'dead';
 export type ExtractionState = { phase: 'closed' | 'open' | 'lockdown'; opensAtTick: number; closesAtTick: number; remainingTicks: number; zone: { x: number; y: number; radius: number }; players: { id: string; outcome: ExtractionOutcome; extractedAtTick: number | null }[] };
@@ -42,10 +43,10 @@ export type CollectionEvent = { sequence: number; tick: number; coreId: string; 
 export type AbilityState = { id: string; dashUntilTick: number; dashReadyAtTick: number; dashDirection: Vector;
   shieldUntilTick: number; shieldReadyAtTick: number };
 export type AbilityEvent = { sequence: number; tick: number; playerId: string; ability: AbilityKind; position: Vector; direction: Vector };
-export type LaserState = { id: string; axis: 'x' | 'y'; coordinate: number; phase: 'idle' | 'warning' | 'active'; warningAtTick: number; activeAtTick: number; endsAtTick: number };
+export type LaserState = { id: string; axis: 'x' | 'y'; coordinate: number; phase: 'idle' | 'warning' | 'active'; warningAtTick: number; activeAtTick: number; endsAtTick: number; stage?: 1 | 2 | 3; previousCoordinate?: number; motion?: { from: number; to: number; speed: number; direction: 1 | -1 } };
 export type PlayerVitals = { id: string; health: number; life: 'alive' | 'respawning'; respawnAtTick: number; invulnerableUntilTick: number; respawnPosition: Vector };
 export type HealthEvent = { sequence: number; tick: number; playerId: string; kind: 'damage' | 'shield_blocked' | 'invulnerable_blocked' | 'death' | 'respawn'; hazardId: string | null; position: Vector; health: number; amount: number };
-export type GameplaySnapshot = { extraction?: ExtractionState; tick: number; cores: CoreState[]; scores: ScoreState[]; events: CollectionEvent[];
+export type GameplaySnapshot = { difficultyStage?: 1 | 2 | 3; extraction?: ExtractionState; tick: number; cores: CoreState[]; scores: ScoreState[]; events: CollectionEvent[];
   abilities?: AbilityState[]; abilityEvents?: AbilityEvent[]; hazards?: LaserState[]; vitals?: PlayerVitals[]; healthEvents?: HealthEvent[]; match?: MatchState };
 export type Snapshot = { type: 'snapshot'; version: 1; epoch: string; tick: number; players: PlayerState[]; gameplay?: GameplaySnapshot };
 export type ErrorCode = 'INVALID_MESSAGE' | 'AUTH_REQUIRED' | 'INVALID_SESSION' | 'AUTH_UNAVAILABLE' | 'SESSION_IN_USE' | 'ARENA_FULL' | 'STALE_SEQUENCE' | 'RATE_LIMITED' | 'SERVER_CLOSING' | 'ROOM_REQUIRED' | 'NOT_MEMBER' | 'MATCH_UNAVAILABLE' | 'ROOM_UNAVAILABLE';
@@ -121,6 +122,7 @@ function nonnegativeInteger(value: unknown): value is number { return Number.isS
 function validGameplay(value: unknown): value is GameplaySnapshot {
   if (!object(value) || !nonnegativeInteger(value.tick) || !Array.isArray(value.cores) || value.cores.length > CORE_RULES.count ||
       !Array.isArray(value.scores) || value.scores.length > MAX_PLAYERS || !Array.isArray(value.events) || value.events.length > CORE_RULES.eventLimit) return false;
+  if (value.difficultyStage !== undefined && value.difficultyStage !== (value.tick >= DIFFICULTY_RULES.stage3Tick ? 3 : value.tick >= DIFFICULTY_RULES.stage2Tick ? 2 : 1)) return false;
   if (value.match !== undefined && !validMatch(value.match, value.tick)) return false;
   if (value.extraction !== undefined && !validExtraction(value.extraction, value.tick, value.match)) return false;
   const position = (p: unknown) => object(p) && finite(p.x) && finite(p.y) && p.x >= 0 && p.x <= 960 && p.y >= 0 && p.y <= 640;
@@ -179,7 +181,17 @@ function validGameplay(value: unknown): value is GameplaySnapshot {
     for (const laser of value.hazards) {
       if (!object(laser) || !laserId(laser.id) || (laser.axis !== 'x' && laser.axis !== 'y') || !finite(laser.coordinate) || laser.coordinate < 0 ||
           laser.coordinate > (laser.axis === 'x' ? 960 : 640) || !nonnegativeInteger(laser.warningAtTick) || !nonnegativeInteger(laser.activeAtTick) || !nonnegativeInteger(laser.endsAtTick) ||
-          laser.activeAtTick - laser.warningAtTick !== HAZARD_RULES.warningTicks || laser.endsAtTick - laser.activeAtTick !== HAZARD_RULES.activeTicks) return false;
+          laser.activeAtTick - laser.warningAtTick !== HAZARD_RULES.warningTicks || laser.endsAtTick - laser.activeAtTick !== (laser.motion === undefined ? HAZARD_RULES.activeTicks : DIFFICULTY_RULES.movingActiveTicks)) return false;
+      if (laser.stage !== undefined && laser.stage !== (laser.warningAtTick >= DIFFICULTY_RULES.stage3Tick ? 3 : laser.warningAtTick >= DIFFICULTY_RULES.stage2Tick ? 2 : 1)) return false;
+      if (laser.motion !== undefined) {
+        const motion = laser.motion; const bound = laser.axis === 'x' ? 960 : 640;
+        if (!object(motion) || (laser.stage !== 2 && laser.stage !== 3) || !finite(motion.from) || !finite(motion.to) ||
+            motion.from < DIFFICULTY_RULES.margin || motion.from > bound - DIFFICULTY_RULES.margin || motion.to < DIFFICULTY_RULES.margin || motion.to > bound - DIFFICULTY_RULES.margin ||
+            !finite(motion.speed) || motion.speed !== (laser.stage === 2 ? DIFFICULTY_RULES.stage2Speed : DIFFICULTY_RULES.stage3Speed) ||
+            motion.direction !== (motion.to > motion.from ? 1 : -1) || Math.abs(motion.to - motion.from) !== motion.speed * DIFFICULTY_RULES.movingActiveTicks / TICK_RATE) return false;
+        const coordinateAt = (tick: number) => motion.from as number + (motion.direction as number) * (motion.speed as number) * Math.max(0, Math.min(DIFFICULTY_RULES.movingActiveTicks, tick - (laser.activeAtTick as number))) / TICK_RATE;
+        if (laser.coordinate !== coordinateAt(value.tick) || laser.previousCoordinate !== coordinateAt(Math.max(laser.activeAtTick as number, value.tick - 1))) return false;
+      } else if (laser.previousCoordinate !== undefined || (laser.stage !== undefined && laser.stage !== 1)) return false;
       const phase = value.tick < laser.warningAtTick || value.tick >= laser.endsAtTick ? 'idle' : value.tick < laser.activeAtTick ? 'warning' : 'active';
       if (laser.phase !== phase) return false;
     }

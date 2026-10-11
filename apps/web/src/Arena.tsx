@@ -44,6 +44,13 @@ export function Arena({ snapshot, playerId }: { snapshot: Snapshot | null; playe
       for (const laser of gameplay?.hazards ?? []) {
         if (laser.phase === 'idle') continue;
         const vertical = laser.axis === 'x';
+        if (laser.motion) {
+          const low = Math.min(laser.motion.from, laser.motion.to); const width = Math.abs(laser.motion.to - laser.motion.from);
+          context!.fillStyle = laser.phase === 'warning' ? '#ffc87518' : '#ff527410';
+          context!.fillRect(vertical ? low : 0, vertical ? 0 : low, vertical ? width : ARENA.width, vertical ? ARENA.height : width);
+          context!.fillStyle = '#ffc875'; context!.font = 'bold 24px system-ui'; context!.textAlign = 'center';
+          context!.fillText(vertical ? (laser.motion.direction === 1 ? '→' : '←') : (laser.motion.direction === 1 ? '↓' : '↑'), vertical ? (laser.motion.from + laser.motion.to) / 2 : ARENA.width / 2, vertical ? ARENA.height / 2 : (laser.motion.from + laser.motion.to) / 2);
+        }
         context!.strokeStyle = laser.phase === 'warning' ? '#ffc875' : '#ff5274';
         context!.lineWidth = laser.phase === 'warning' ? 2 : 10;
         context!.setLineDash(laser.phase === 'warning' ? [10, 8] : []);
@@ -51,8 +58,9 @@ export function Arena({ snapshot, playerId }: { snapshot: Snapshot | null; playe
         context!.lineTo(vertical ? laser.coordinate : ARENA.width, vertical ? ARENA.height : laser.coordinate); context!.stroke();
         context!.setLineDash([]);
         context!.fillStyle = laser.phase === 'warning' ? '#ffc875' : '#ff9aaa';
-        context!.font = 'bold 12px system-ui'; context!.textAlign = 'left';
-        context!.fillText(laser.phase === 'warning' ? 'LASER WARNING' : 'ACTIVE LASER', vertical ? laser.coordinate + 12 : 16, vertical ? 30 : laser.coordinate - 10);
+        const labelLeft = vertical && laser.coordinate > ARENA.width - 160;
+        context!.font = 'bold 12px system-ui'; context!.textAlign = labelLeft ? 'right' : 'left';
+        context!.fillText(laser.phase === 'warning' ? (laser.motion ? 'SWEEP WARNING' : 'LASER WARNING') : (laser.motion ? 'ACTIVE SWEEP' : 'ACTIVE LASER'), vertical ? laser.coordinate + (labelLeft ? -12 : 12) : 16, vertical ? 30 : laser.coordinate - 10);
       }
       for (const core of gameplay?.cores ?? []) {
         if (!core.active) continue;
