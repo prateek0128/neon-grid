@@ -21,7 +21,7 @@ export function laserCollision(laser: LaserState, position: Vector, previous: Ve
   return Math.min(position[laser.axis], previous[laser.axis]) <= laser.coordinate + radius &&
     Math.max(position[laser.axis], previous[laser.axis]) >= laser.coordinate - radius;
 }
-export function playerAlive(state: GameplayState, id: string) { return state.vitals.some(v => v.id === id && v.life === 'alive'); }
+export function playerAlive(state: GameplayState, id: string) { return state.vitals.some(v => v.id === id && v.life === 'alive') && (!state.extraction || state.extraction.players.find(p => p.id === id)?.outcome === 'alive'); }
 export function safeRespawnPosition(state: GameplayState, player: GameplayPlayer, players: GameplayPlayer[]): Vector {
   const origin = spawnPosition(player.slot);
   const cells = validCoreCells(players.filter(p => p.id !== player.id), state.cores).filter(p =>
@@ -41,7 +41,7 @@ export function advanceHazards(state: GameplayState, players: GameplayPlayer[]) 
   state.hazards = [laser];
   for (const player of [...players].sort((a, b) => a.slot - b.slot || a.id.localeCompare(b.id))) {
     const vital = state.vitals.find(v => v.id === player.id);
-    if (!vital) continue;
+    if (!vital || state.extraction?.players.find(p => p.id === player.id)?.outcome === 'extracted') continue;
     if (vital.life === 'respawning') {
       if (state.tick >= vital.respawnAtTick) {
         player.position = safeRespawnPosition(state, player, players);

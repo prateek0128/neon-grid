@@ -106,3 +106,23 @@ it('does not resurrect a returned match from an old in-flight room snapshot', as
   probe.send(JSON.stringify({ type: 'authenticate', version: 1, accessToken: 'memberA'.repeat(5), roomId, matchId: databaseMatch }));
   expect(JSON.parse(String((await received)[0]))).toMatchObject({ type: 'error', code: 'NOT_MEMBER' });
 });
+it('shares extraction and restores its frozen position beyond the position grace before replay clears it', async () => {
+  const a = await connect(); const b = await connect(1);
+  for (let sequence = 0; sequence < 10; sequence++) {
+    a.ws.send(JSON.stringify({ type: 'input', version: 1, sessionId: a.welcome.sessionId, sequence, movement: { x: 1, y: 1 } }));
+    await new Promise(resolve => setTimeout(resolve, 5)); await vi.advanceTimersByTimeAsync(100);
+  }
+  const extracted = await a.next<Snapshot>(m => m.type === 'snapshot' && m.gameplay?.extraction?.players.some(p => p.id === ids[0] && p.outcome === 'extracted') === true);
+  const shared = await b.next<Snapshot>(m => m.type === 'snapshot' && m.gameplay?.extraction?.players.some(p => p.id === ids[0] && p.outcome === 'extracted') === true);
+  expect(shared.gameplay!.extraction).toEqual(extracted.gameplay!.extraction);
+  const position = extracted.players.find(p => p.id === ids[0])!.position;
+  const closed = once(a.ws, 'close'); a.ws.close(); await closed;
+  await vi.advanceTimersByTimeAsync(16000);
+  const restored = await connect();
+  expect(restored.snapshot.gameplay!.extraction!.players.find(p => p.id === ids[0])!.outcome).toBe('extracted');
+  expect(restored.snapshot.players.find(p => p.id === ids[0])!.position).toEqual(position);
+  const replayClosed = once(restored.ws, 'close'); request(restored, 0); await replayClosed;
+  await new Promise(resolve => setTimeout(resolve, 10));
+  const next = await connect();
+  expect(next.snapshot.gameplay!.extraction!.players.every(p => p.outcome === 'alive' && p.extractedAtTick === null)).toBe(true);
+});

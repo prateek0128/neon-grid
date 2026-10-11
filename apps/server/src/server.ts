@@ -8,16 +8,21 @@ import { activateAbility, advanceAbilityPosition, advanceGameplay, advancePositi
 import type { GameplayPlayer, GameplayState } from '@neon/simulation';
 import type { VerifyToken } from './auth.ts';
 import { validateOrigins } from './config.ts';
-import type { RoomStore } from './rooms.ts';
+import { RoomAuthorityError } from './rooms.ts';
+import type { AuthorityFailure, RoomStore } from './rooms.ts';
+import { readinessCondition } from './readiness.ts';
+import type { ReadinessCondition } from './readiness.ts';
 
 type Player = PlayerState & { userId: string; movement: Vector; lastInputAt: number; lastDirection: Vector | null; lastDirectionAt: number; disconnectedAt: number | null; socket: WebSocket | null };
 type ArenaState = { id: string; roomId: string | null; players: Map<string, Player>; eligible: Map<string, { id: string; slot: number }>; gameplay?: GameplayState; lifecycleBusy?: boolean };
 type Connection = { player: Player | null; arena: ArenaState | null; sessionId: string; expiresAt: number; authenticating: boolean; accessToken: string | null; lifecycleBusy: boolean; tokens: number; rateAt: number; alive: boolean; authTimer: ReturnType<typeof setTimeout> };
+export type ServerDiagnostic = { event: 'upgrade_received' | 'upgrade_rejected' | 'upgrade_accepted' | 'socket_error' | 'socket_closed' | 'message_rejected' | 'authority_unavailable' | 'authority_recovered' | 'readiness' | 'diagnostics_limited'; reason?: 'closing' | 'path' | 'origin' | 'capacity' | 'not_ready' | 'handshake' | AuthorityFailure | 'unknown'; condition?: ReadinessCondition; syncInFlight?: boolean; authorityFailure?: AuthorityFailure | 'unknown'; path?: 'ws' | 'other'; originAllowed?: boolean; status?: number; code?: number | ErrorCode; authenticated?: boolean; scope?: 'connections' | 'readiness' };
 
-export function createGameServer(options: { verifyToken: VerifyToken; allowedOrigins: string[]; rooms?: RoomStore; allowTestArena?: boolean; matchDurationTicks?: number; shutdownGraceMs?: number }) {
+export function createGameServer(options: { verifyToken: VerifyToken; allowedOrigins: string[]; rooms?: RoomStore; allowTestArena?: boolean; extractionWindowTicks?: number; matchDurationTicks?: number; shutdownGraceMs?: number; diagnostic?: (event: ServerDiagnostic) => void }) {
   validateOrigins(options.allowedOrigins);
   if (options.shutdownGraceMs !== undefined && (!Number.isSafeInteger(options.shutdownGraceMs) || options.shutdownGraceMs < 0 || options.shutdownGraceMs > 5000)) throw new Error('Invalid shutdown grace.');
   if (options.matchDurationTicks !== undefined && (!Number.isSafeInteger(options.matchDurationTicks) || options.matchDurationTicks < 1)) throw new Error('Invalid match duration.');
+  if (options.extractionWindowTicks !== undefined && (!Number.isSafeInteger(options.extractionWindowTicks) || options.extractionWindowTicks < 1)) throw new Error('Invalid extraction window.');
   const connections = new Map<WebSocket, Connection>();
   const epoch = randomUUID();
   const testArena: ArenaState = { id: epoch, roomId: null, players: new Map(), eligible: new Map() };
@@ -29,7 +34,29 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
   let syncInFlight = false;
   let tick = 0;
   let closing = false;
-  const isReady = () => !closing && http.listening && (options.rooms ? roomsHealthy && performance.now() - lastRoomSync <= 5000 : !!options.allowTestArena);
+  let authorityFailure: AuthorityFailure | 'unknown' | null = null;
+  let hasSuccessfulSync = false;
+  let lastReadinessCondition: ReadinessCondition | null = null; let lastReadinessLog = -Infinity;
+  const diagnosticBudgets = { connections: { window: performance.now(), count: 0 }, readiness: { window: performance.now(), count: 0 } };
+  function diagnostic(event: ServerDiagnostic) {
+    if (!options.diagnostic) return;
+    // Untrusted connection traffic must not consume the authority diagnostic budget.
+    const scope = event.event === 'readiness' || event.event === 'authority_unavailable' || event.event === 'authority_recovered' ? 'readiness' : 'connections';
+    const budget = diagnosticBudgets[scope];
+    if (performance.now() - budget.window >= 60000) { budget.window = performance.now(); budget.count = 0; }
+    if (budget.count++ < 60) options.diagnostic(event);
+    else if (budget.count === 61) options.diagnostic({ event: 'diagnostics_limited', scope });
+  }
+  const currentReadiness = () => readinessCondition({ closing, listening: http.listening, hasRooms: !!options.rooms, allowTestArena: !!options.allowTestArena,
+    healthy: roomsHealthy, hasSuccessfulSync, hasFailure: authorityFailure !== null, now: performance.now(), lastSync: lastRoomSync });
+  const isReady = () => currentReadiness() === 'ready';
+  function reportReadiness() {
+    const condition = currentReadiness(); const now = performance.now();
+    if (condition !== lastReadinessCondition || (condition !== 'ready' && now - lastReadinessLog >= 30000)) {
+      diagnostic({ event: 'readiness', condition, syncInFlight, ...(authorityFailure ? { authorityFailure } : {}) });
+      lastReadinessCondition = condition; lastReadinessLog = now;
+    }
+  }
   const http = createServer((request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('Content-Type', 'application/json');
@@ -39,19 +66,32 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
     if (health || ready) {
       if (request.method !== 'GET' && request.method !== 'HEAD') { status = 405; body = { error: 'Method not allowed' }; response.setHeader('Allow', 'GET, HEAD'); }
       else if (health) { status = closing ? 503 : 200; body = { status: closing ? 'closing' : 'ok', protocol: PROTOCOL_VERSION }; }
-      else { status = isReady() ? 200 : 503; body = { status: status === 200 ? 'ready' : 'not_ready', protocol: PROTOCOL_VERSION }; }
+      else { reportReadiness(); status = isReady() ? 200 : 503; body = { status: status === 200 ? 'ready' : 'not_ready', protocol: PROTOCOL_VERSION }; }
     }
     response.writeHead(status); response.end(request.method === 'HEAD' ? undefined : JSON.stringify(body));
   });
   http.headersTimeout = 10000; http.requestTimeout = 10000; http.keepAliveTimeout = 5000; http.maxHeadersCount = 32;
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES, perMessageDeflate: false });
+  wss.on('wsClientError', (_error, socket) => {
+    diagnostic({ event: 'upgrade_rejected', reason: 'handshake', status: 400 });
+    if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+    else socket.destroy();
+  });
   http.on('upgrade', (request, socket, head) => {
-    if (closing || request.url !== '/ws' || !options.allowedOrigins.includes(request.headers.origin ?? '') || connections.size >= 32) {
+    const originAllowed = options.allowedOrigins.includes(request.headers.origin ?? '');
+    diagnostic({ event: 'upgrade_received', path: request.url === '/ws' ? 'ws' : 'other', originAllowed });
+    // Never log the raw URL, Origin, headers, error text or message payload.
+    socket.on('error', () => diagnostic({ event: 'socket_error' }));
+    const reason = closing ? 'closing' : request.url !== '/ws' ? 'path' : !originAllowed ? 'origin' : connections.size >= 32 ? 'capacity' : null;
+    if (reason) {
+      diagnostic({ event: 'upgrade_rejected', reason, status: 403 });
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;
     }
-    if (!isReady()) { socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n'); return; }
-    wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, request));
+    if (!isReady()) { reportReadiness(); diagnostic({ event: 'upgrade_rejected', reason: 'not_ready', status: 503 }); socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n'); return; }
+    try {
+      wss.handleUpgrade(request, socket, head, ws => { diagnostic({ event: 'upgrade_accepted', status: 101 }); wss.emit('connection', ws, request); });
+    } catch { diagnostic({ event: 'upgrade_rejected', reason: 'handshake', status: 400 }); socket.destroy(); }
   });
   function send(ws: WebSocket, message: ServerMessage) {
     if (ws.readyState !== WebSocket.OPEN) return;
@@ -59,6 +99,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
     ws.send(JSON.stringify(message));
   }
   function reject(ws: WebSocket, code: ErrorCode, message: string) {
+    diagnostic({ event: 'message_rejected', code });
     send(ws, { type: 'error', version: PROTOCOL_VERSION, code, message });
     ws.close(code === 'SESSION_IN_USE' ? 4009 : 1008, code);
   }
@@ -84,7 +125,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
   }
   function expireDisconnected(now: number) {
     for (const arena of arenas.values()) for (const [userId, player] of arena.players) {
-      if (player.disconnectedAt !== null && now - player.disconnectedAt >= RECONNECT_GRACE_MS) arena.players.delete(userId);
+      if (player.disconnectedAt !== null && now - player.disconnectedAt >= RECONNECT_GRACE_MS && arena.gameplay?.extraction?.players.find(p => p.id === player.id)?.outcome !== 'extracted') arena.players.delete(userId);
     }
   }
   async function syncRooms() {
@@ -94,15 +135,13 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
       const connected = [...connections].filter(([ws,c]) => ws.readyState===WebSocket.OPEN && c.player && c.arena?.roomId && c.expiresAt>Date.now()).map(([,c])=>c.player!.id);
       const states = await options.rooms.tick(epoch, connected);
       if (closing) return;
-      roomsHealthy = true;
-      lastRoomSync = performance.now();
       const activeMatches = new Set(states.filter(state => !closedMatches.has(state.matchId)).map(state => state.matchId));
       for (const id of closedMatches) if (!states.some(state => state.matchId === id)) closedMatches.delete(id);
       for (const state of states) {
         if (closedMatches.has(state.matchId)) continue;
         let arena = arenas.get(state.matchId);
         if (!arena) {
-          arena = { id: state.matchId, roomId: state.roomId, players: new Map(), eligible: new Map(), gameplay: createGameplay(options.matchDurationTicks, state.matchId) };
+          arena = { id: state.matchId, roomId: state.roomId, players: new Map(), eligible: new Map(), gameplay: createGameplay(options.matchDurationTicks, state.matchId, options.extractionWindowTicks) };
           arenas.set(state.matchId, arena);
         }
         arena.eligible = new Map(state.members.map(m => [m.userId, { id: m.id, slot: m.slot }]));
@@ -116,20 +155,26 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
         for (const player of arena.players.values()) if (player.socket) reject(player.socket, 'MATCH_UNAVAILABLE', 'Movement session ended. Return to the lobby.');
         arenas.delete(id);
       }
-    } catch {
+      if (!roomsHealthy) diagnostic({ event: 'authority_recovered' });
+      authorityFailure = null; roomsHealthy = true; hasSuccessfulSync = true; lastRoomSync = performance.now();
+    } catch (error) {
+      const reason = error instanceof RoomAuthorityError ? error.reason : 'unknown';
+      if (reason !== authorityFailure) diagnostic({ event: 'authority_unavailable', reason });
+      authorityFailure = reason;
       roomsHealthy = false;
       for (const [ws, connection] of connections) if (connection.arena?.roomId) reject(ws, 'ROOM_UNAVAILABLE', 'Room authority unavailable. Reconnecting…');
-    } finally { syncInFlight = false; }
+    } finally { syncInFlight = false; reportReadiness(); }
   }
-  const roomTimer = setInterval(() => { void syncRooms(); }, 1000);
+  const roomTimer = setInterval(() => { void syncRooms(); reportReadiness(); }, 1000);
   void syncRooms();
   wss.on('connection', (ws: WebSocket) => {
     const connection: Connection = { player: null, arena: null, sessionId: randomUUID(), expiresAt: 0, authenticating: false, accessToken: null, lifecycleBusy: false, tokens: 90, rateAt: performance.now(), alive: true,
       authTimer: setTimeout(() => reject(ws, 'AUTH_REQUIRED', 'Authenticate within five seconds.'), 5000) };
     connections.set(ws, connection);
-    ws.on('error', () => { /* Socket close handles player cleanup. Do not log payloads or tokens. */ });
+    ws.on('error', () => diagnostic({ event: 'socket_error' }));
     ws.on('pong', () => { connection.alive = true; });
-    ws.on('close', () => {
+    ws.on('close', code => {
+      diagnostic({ event: 'socket_closed', code, authenticated: !!connection.player });
       clearTimeout(connection.authTimer);
       connections.delete(ws); connection.accessToken = null;
       const player = connection.player;
@@ -243,7 +288,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
             return;
           }
           if (gameplayPlayers(arena).filter(p => p.connected).length < 2) { deny('NOT_READY'); return; }
-          arena.gameplay = createGameplay(options.matchDurationTicks);
+          arena.gameplay = createGameplay(options.matchDurationTicks, undefined, options.extractionWindowTicks);
           for (const member of arena.players.values()) {
             member.position = spawnPosition(member.slot); member.movement = { x: 0, y: 0 }; member.lastDirection = null; member.lastSequence = -1;
           }

@@ -18,3 +18,8 @@ it('allows explicit development fixtures and validates legacy key roles without 
   expect(config).toMatchObject({ host: '127.0.0.1', port: 8787, allowTestArena: true });
   expect(() => serverConfiguration({ ...env, SUPABASE_SERVER_KEY: jwt('anon') })).toThrow('SUPABASE_SERVER_KEY');
 });
+it('configures extraction from server settings without a second match clock', () => {
+  expect(serverConfiguration(env).extractionWindowTicks).toBe(600);
+  expect(serverConfiguration({ ...env, EXTRACTION_WINDOW_SECONDS: '5' }).extractionWindowTicks).toBe(150);
+  for (const value of ['0', '-1', '1.5', '3601', 'invalid']) expect(() => serverConfiguration({ ...env, EXTRACTION_WINDOW_SECONDS: value })).toThrow();
+});

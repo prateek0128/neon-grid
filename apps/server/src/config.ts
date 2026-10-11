@@ -34,6 +34,8 @@ export function serverConfiguration(env: Record<string, string | undefined>) {
   if (!Number.isInteger(seconds) || seconds < 10 || seconds > 3600) throw new Error('MATCH_DURATION_SECONDS must be an integer from 10 to 3600.');
   if (env.ENABLE_MOVEMENT_TEST_ARENA !== undefined && !['true', 'false'].includes(env.ENABLE_MOVEMENT_TEST_ARENA)) throw new Error('ENABLE_MOVEMENT_TEST_ARENA must be true or false.');
   if (production && env.ENABLE_MOVEMENT_TEST_ARENA === 'true') throw new Error('Disable ENABLE_MOVEMENT_TEST_ARENA in production.');
-  return { url, key, serverKey, origins, host, port, matchDurationTicks: seconds * TICK_RATE,
+  const extractionSeconds = Number(env.EXTRACTION_WINDOW_SECONDS ?? '20');
+  if (!Number.isInteger(extractionSeconds) || extractionSeconds < 1 || extractionSeconds > 3600) throw new Error('EXTRACTION_WINDOW_SECONDS must be an integer from 1 to 3600.');
+  return { extractionWindowTicks: extractionSeconds * TICK_RATE, url, key, serverKey, origins, host, port, matchDurationTicks: seconds * TICK_RATE,
     allowTestArena: !production && env.ENABLE_MOVEMENT_TEST_ARENA === 'true' };
 }

@@ -95,3 +95,5 @@ input:focus { outline: 2px solid #56f0d0; outline-offset: 2px; }
 .match-results th, .match-results td { padding: .9rem .6rem; border-bottom: 1px solid #30425a; }
 .match-results thead { font-size: .75rem; color: #9daec5; text-transform: uppercase; letter-spacing: .08em; }
 .match-results .results-self { background: #19343b; color: #56f0d0; }
+
+.extraction-status { color: #86ffe0; border-left: 3px solid #29e6c4; padding: .65rem; background: #29e6c410; overflow-wrap: anywhere; }

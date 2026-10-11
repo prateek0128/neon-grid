@@ -1,4 +1,4 @@
-import { CORE_RULES, HAZARD_RULES, MATCH_RULES } from '@neon/protocol';
+import { CORE_RULES, HAZARD_RULES, MATCH_RULES, EXTRACTION_RULES } from '@neon/protocol';
 import type { AbilityEvent, AbilityState, CoreState, GameplaySnapshot, HealthEvent, LaserState, PlayerState, PlayerVitals, Vector, MatchState, MatchRanking } from '@neon/protocol';
 import { ARENA, spawnPosition } from './index.ts';
 import { advanceHazards, laserAtTick, playerAlive } from './hazards.ts';
@@ -10,9 +10,10 @@ export type GameplayState = Omit<GameplaySnapshot, 'cores' | 'abilities' | 'abil
   match: MatchState; participants: Map<string, Omit<MatchRanking, 'rank'>>; healthEvents: HealthEvent[]; hazardHits: Map<string, string>; nextCore: number; nextEvent: number };
 export type GameplayPlayer = Pick<PlayerState, 'id' | 'slot' | 'position' | 'connected'> & { previousPosition?: Vector };
 
-export function createGameplay(durationTicks: number = MATCH_RULES.durationTicks, generationId: string = crypto.randomUUID()): GameplayState {
+export function createGameplay(durationTicks: number = MATCH_RULES.durationTicks, generationId: string = crypto.randomUUID(), extractionWindowTicks: number = EXTRACTION_RULES.windowTicks): GameplayState {
   if (!Number.isSafeInteger(durationTicks) || durationTicks < 1) throw new Error('Match duration must be a positive number of ticks.');
-  return { match: { id: generationId, phase: 'ACTIVE', durationTicks, endedAtTick: null, results: null }, participants: new Map(), tick: 0, cores: [], scores: [], events: [], abilities: [], abilityEvents: [], vitals: [], hazards: [laserAtTick(0)], healthEvents: [], hazardHits: new Map(), nextCore: 1, nextEvent: 1 };
+  if (!Number.isSafeInteger(extractionWindowTicks) || extractionWindowTicks < 1) throw new Error('Extraction window must be positive ticks.');
+  return { extraction: { phase: durationTicks <= extractionWindowTicks ? 'open' : 'closed', opensAtTick: Math.max(0, durationTicks - extractionWindowTicks), closesAtTick: durationTicks, remainingTicks: durationTicks, zone: { ...EXTRACTION_RULES.zone }, players: [] }, match: { id: generationId, phase: 'ACTIVE', durationTicks, endedAtTick: null, results: null }, participants: new Map(), tick: 0, cores: [], scores: [], events: [], abilities: [], abilityEvents: [], vitals: [], hazards: [laserAtTick(0)], healthEvents: [], hazardHits: new Map(), nextCore: 1, nextEvent: 1 };
 }
 
 // The arena has no interior walls. Cell centers are inside its solid boundary.
@@ -37,6 +38,7 @@ function spawn(state: GameplayState, players: GameplayPlayer[], random: () => nu
 
 export function reconcileGameplay(state: GameplayState, players: GameplayPlayer[], random: () => number = Math.random) {
   if (state.match.phase === 'RESULTS') return;
+  for (const player of players) if (!state.extraction!.players.some(p => p.id === player.id)) state.extraction!.players.push({ id: player.id, outcome: 'alive', extractedAtTick: null });
   for (const player of players) if (!state.participants.has(player.id)) state.participants.set(player.id, { id: player.id, slot: player.slot, score: 0, coresCollected: 0 });
   const members = new Set(players.map(p => p.id));
   state.scores = state.scores.filter(s => members.has(s.id));
@@ -88,11 +90,26 @@ export function advanceGameplay(state: GameplayState, players: GameplayPlayer[],
     const replacement = spawn(state, players, random);
     if (replacement) state.cores[i] = replacement;
   }
-  if (state.tick >= state.match.durationTicks) finalizeGameplay(state);
+  const extraction = state.extraction!;
+  extraction.remainingTicks = Math.max(0, extraction.closesAtTick - state.tick);
+  extraction.phase = state.tick >= extraction.opensAtTick ? 'open' : 'closed';
+  if (extraction.phase === 'open') for (const player of connected) {
+    const outcome = extraction.players.find(p => p.id === player.id);
+    if (outcome?.outcome === 'alive' && Math.hypot(player.position.x - extraction.zone.x, player.position.y - extraction.zone.y) <= extraction.zone.radius) {
+      outcome.outcome = 'extracted'; outcome.extractedAtTick = state.tick;
+      const ability = state.abilities.find(a => a.id === player.id);
+      if (ability) { ability.dashUntilTick = Math.min(ability.dashUntilTick, state.tick); ability.shieldUntilTick = Math.min(ability.shieldUntilTick, state.tick); }
+    }
+  }
+  if (state.tick >= state.match.durationTicks) {
+    extraction.phase = 'lockdown';
+    for (const outcome of extraction.players) if (outcome.outcome === 'alive') outcome.outcome = state.vitals.find(v => v.id === outcome.id)?.life === 'respawning' ? 'dead' : 'locked_down';
+    finalizeGameplay(state);
+  }
 }
 
 export function gameplaySnapshot(state: GameplayState): GameplaySnapshot {
-  return { match: structuredClone(state.match), tick: state.tick, cores: state.cores.map(c => ({ id: c.id, position: { ...c.position }, active: c.active })),
+  return { extraction: structuredClone(state.extraction), match: structuredClone(state.match), tick: state.tick, cores: state.cores.map(c => ({ id: c.id, position: { ...c.position }, active: c.active })),
     scores: state.scores.map(s => ({ ...s })), events: state.events.map(e => ({ ...e, position: { ...e.position } })),
     abilities: state.abilities.map(a => ({ ...a, dashDirection: { ...a.dashDirection } })),
     abilityEvents: state.abilityEvents.map(e => ({ ...e, position: { ...e.position }, direction: { ...e.direction } })),
@@ -111,7 +128,7 @@ export function finalizeGameplay(state: GameplayState): boolean {
   if (state.match.phase !== 'ACTIVE' || state.tick < state.match.durationTicks) return false;
   const ordered = [...state.participants.values()].sort((a, b) => b.score - a.score || a.slot - b.slot || a.id.localeCompare(b.id));
   let previousScore = -1; let rank = 0;
-  const rankings = ordered.map((player, index) => { if (player.score !== previousScore) rank = index + 1; previousScore = player.score; return { ...player, rank }; });
+  const rankings = ordered.map((player, index) => { if (player.score !== previousScore) rank = index + 1; previousScore = player.score; return { ...player, rank, extractionOutcome: state.extraction?.players.find(p => p.id === player.id)?.outcome }; });
   const winnerIds = rankings.filter(p => p.rank === 1).map(p => p.id);
   state.match.phase = 'RESULTS'; state.match.endedAtTick = state.tick;
   state.match.results = { matchId: state.match.id, durationTicks: state.tick, rankings, winnerIds, outcome: !winnerIds.length ? 'empty' : winnerIds.length === 1 ? 'winner' : 'tie' };

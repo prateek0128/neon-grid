@@ -6,6 +6,7 @@ import { attachKeyboard } from './keyboard';
 export type ConnectionView = { status: 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error'; detail: string; playerId: string | null; snapshot: Snapshot | null; abilityNotice?: string; lifecycleNotice?: string; replayPending?: boolean };
 export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (view: ConnectionView) => void, room?: { roomId: string; matchId: string }) {
   let stopped = false;
+  let opening = false;
   let socket: WebSocket | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let connectionTimer: ReturnType<typeof setTimeout> | null = null;
@@ -52,6 +53,8 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
     }
   });
   async function open() {
+    if (stopped || terminal || opening || (socket && socket.readyState < WebSocket.CLOSING)) return;
+    opening = true;
     try {
       if (refreshAuth) {
         refreshAuth = false;
@@ -59,7 +62,7 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
         if (renewed.error || !renewed.data.session) throw new Error('Session expired. Reload to authenticate again.');
       }
       const { data, error } = await auth.auth.getSession();
-      if (stopped) return;
+      if (stopped || terminal) return;
       if (error || !data.session) throw new Error('No Supabase session. Connect again.');
       const current = new WebSocket(serverUrl);
       socket = current;
@@ -68,6 +71,7 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
       movement = { x: 0, y: 0 };
       connectionTimer = setTimeout(() => current.close(), 8000);
       current.onopen = () => {
+        if (stopped || terminal || socket !== current) { current.close(); return; }
         current.send(JSON.stringify({ type: 'authenticate', version: PROTOCOL_VERSION, accessToken: data.session!.access_token, ...room }));
       };
       current.onmessage = event => {
@@ -92,7 +96,7 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
           const notices = { HOST_ONLY: 'Only the current host can control the run.', INVALID_TRANSITION: 'This action is unavailable in the current match state.', STALE_MATCH: 'The match changed. Try again after reconnecting.', NOT_READY: 'At least two connected players are required to replay.', BUSY: 'A replay request is already pending.', ROOM_UNAVAILABLE: 'Room authority unavailable. Try again shortly.' };
           update({ lifecycleNotice: notices[message.reason], replayPending: false });
         } else if (message.type === 'ability_rejected') {
-          update({ abilityNotice: message.reason === 'MATCH_ENDED' ? 'Match complete. Wait for replay or return to the lobby.' : message.reason === 'DEAD' ? 'Respawning. Abilities return when you are alive.' : message.reason === 'NO_DIRECTION' ? 'Move first, then Dash within one second.' : `${message.ability === 'dash' ? 'Dash' : 'Shield'} is cooling down.` });
+          update({ abilityNotice: message.reason === 'MATCH_ENDED' ? 'Match complete. Wait for replay or return to the lobby.' : message.reason === 'EXTRACTED' ? 'Extracted. Wait for results.' : message.reason === 'DEAD' ? 'Respawning. Abilities return when you are alive.' : message.reason === 'NO_DIRECTION' ? 'Move first, then Dash within one second.' : `${message.ability === 'dash' ? 'Dash' : 'Shield'} is cooling down.` });
         } else if (message.type === 'error') {
           terminal = !['SERVER_CLOSING', 'AUTH_UNAVAILABLE', 'ROOM_UNAVAILABLE'].includes(message.code);
           if (message.code === 'INVALID_SESSION' && authFailures++ === 0) {
@@ -102,19 +106,22 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
           update({ status: terminal ? 'error' : 'reconnecting', detail: `${message.code}: ${message.message}` });
         }
       };
-      current.onerror = () => { /* Close drives retry; no token-bearing error output. */ };
-      current.onclose = () => {
+      current.onerror = () => {
+        if (!stopped && !terminal && socket === current) update({ detail: 'WebSocket transport failed. Check server readiness and upgrade diagnostics.' });
+      };
+      current.onclose = event => {
+        if (socket !== current) return;
         if (connectionTimer) clearTimeout(connectionTimer);
         sessionId = null;
         movement = { x: 0, y: 0 };
         if (stopped || terminal) return;
-        update({ status: 'reconnecting', detail: 'Connection interrupted. Retrying…' });
+        update({ status: 'reconnecting', detail: `Connection closed (${event.code}). Retrying… Check server readiness and upgrade diagnostics.` });
         const delay = Math.min(500 * 2 ** attempts++, 8000) + Math.random() * 250;
-        retryTimer = setTimeout(() => { void open(); }, delay);
+        retryTimer = setTimeout(() => { retryTimer = null; void open(); }, delay);
       };
     } catch (error) {
       if (!stopped) update({ status: 'error', detail: error instanceof Error ? error.message : 'Connection failed.' });
-    }
+    } finally { opening = false; }
   }
   update({});
   void open();

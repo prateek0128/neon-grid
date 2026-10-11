@@ -14,8 +14,11 @@ export const HAZARD_RULES = { maxHealth: 100, damage: 50, initialDelayTicks: 6 *
   warningTicks: 45, activeTicks: TICK_RATE, intervalTicks: 4 * TICK_RATE, halfWidth: 5,
   respawnTicks: 3 * TICK_RATE, invulnerabilityTicks: 45 } as const;
 
+export const EXTRACTION_RULES = { windowTicks: 20 * TICK_RATE, zone: { x: 480, y: 320, radius: 60 } } as const;
+export type ExtractionOutcome = 'alive' | 'extracted' | 'locked_down' | 'dead';
+export type ExtractionState = { phase: 'closed' | 'open' | 'lockdown'; opensAtTick: number; closesAtTick: number; remainingTicks: number; zone: { x: number; y: number; radius: number }; players: { id: string; outcome: ExtractionOutcome; extractedAtTick: number | null }[] };
 export const MATCH_RULES = { durationTicks: 90 * TICK_RATE } as const;
-export type MatchRanking = { id: string; slot: number; rank: number; score: number; coresCollected: number };
+export type MatchRanking = { id: string; slot: number; rank: number; score: number; coresCollected: number; extractionOutcome?: ExtractionOutcome };
 export type MatchResults = { matchId: string; durationTicks: number; outcome: 'winner' | 'tie' | 'empty'; winnerIds: string[]; rankings: MatchRanking[] };
 export type MatchState = { id: string; phase: 'ACTIVE' | 'RESULTS'; durationTicks: number; endedAtTick: number | null; results: MatchResults | null };
 export type LifecycleRequest = { type: 'lifecycle'; version: 1; sessionId: string; sequence: number; matchId: string; action: 'replay' | 'return' };
@@ -42,14 +45,14 @@ export type AbilityEvent = { sequence: number; tick: number; playerId: string; a
 export type LaserState = { id: string; axis: 'x' | 'y'; coordinate: number; phase: 'idle' | 'warning' | 'active'; warningAtTick: number; activeAtTick: number; endsAtTick: number };
 export type PlayerVitals = { id: string; health: number; life: 'alive' | 'respawning'; respawnAtTick: number; invulnerableUntilTick: number; respawnPosition: Vector };
 export type HealthEvent = { sequence: number; tick: number; playerId: string; kind: 'damage' | 'shield_blocked' | 'invulnerable_blocked' | 'death' | 'respawn'; hazardId: string | null; position: Vector; health: number; amount: number };
-export type GameplaySnapshot = { tick: number; cores: CoreState[]; scores: ScoreState[]; events: CollectionEvent[];
+export type GameplaySnapshot = { extraction?: ExtractionState; tick: number; cores: CoreState[]; scores: ScoreState[]; events: CollectionEvent[];
   abilities?: AbilityState[]; abilityEvents?: AbilityEvent[]; hazards?: LaserState[]; vitals?: PlayerVitals[]; healthEvents?: HealthEvent[]; match?: MatchState };
 export type Snapshot = { type: 'snapshot'; version: 1; epoch: string; tick: number; players: PlayerState[]; gameplay?: GameplaySnapshot };
 export type ErrorCode = 'INVALID_MESSAGE' | 'AUTH_REQUIRED' | 'INVALID_SESSION' | 'AUTH_UNAVAILABLE' | 'SESSION_IN_USE' | 'ARENA_FULL' | 'STALE_SEQUENCE' | 'RATE_LIMITED' | 'SERVER_CLOSING' | 'ROOM_REQUIRED' | 'NOT_MEMBER' | 'MATCH_UNAVAILABLE' | 'ROOM_UNAVAILABLE';
 export type ProtocolError = { type: 'error'; version: 1; code: ErrorCode; message: string };
 export type Welcome = { type: 'welcome'; version: 1; playerId: string; sessionId: string; epoch: string; tickRate: number };
 export type Authenticated = { type: 'authenticated'; version: 1 };
-export type AbilityRejected = { type: 'ability_rejected'; version: 1; ability: AbilityKind; reason: 'COOLDOWN' | 'NO_DIRECTION' | 'DEAD' | 'MATCH_ENDED' };
+export type AbilityRejected = { type: 'ability_rejected'; version: 1; ability: AbilityKind; reason: 'COOLDOWN' | 'NO_DIRECTION' | 'DEAD' | 'EXTRACTED' | 'MATCH_ENDED' };
 export type ServerMessage = Snapshot | ProtocolError | Welcome | Authenticated | AbilityRejected | LifecycleRejected | MatchComplete;
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -96,7 +99,7 @@ export function parseServerMessage(raw: string): ServerMessage | null {
   if (value.type === 'welcome' && identifier(value.playerId) && identifier(value.sessionId) && identifier(value.epoch) && value.tickRate === TICK_RATE) return value as Welcome;
   if (value.type === 'authenticated') return value as Authenticated;
   if (value.type === 'ability_rejected' && exactKeys(value, ['type', 'version', 'ability', 'reason']) &&
-      (value.ability === 'dash' || value.ability === 'shield') && typeof value.reason === 'string' && ['COOLDOWN', 'NO_DIRECTION', 'DEAD', 'MATCH_ENDED'].includes(value.reason)) return value as AbilityRejected;
+      (value.ability === 'dash' || value.ability === 'shield') && typeof value.reason === 'string' && ['COOLDOWN', 'NO_DIRECTION', 'DEAD', 'EXTRACTED', 'MATCH_ENDED'].includes(value.reason)) return value as AbilityRejected;
   if (value.type === 'error' && typeof value.code === 'string' && typeof value.message === 'string') return value as ProtocolError;
   if (value.type !== 'snapshot' || !identifier(value.epoch) || !Number.isSafeInteger(value.tick) || (value.tick as number) < 0 ||
       !Array.isArray(value.players) || value.players.length > MAX_PLAYERS) return null;
@@ -119,6 +122,7 @@ function validGameplay(value: unknown): value is GameplaySnapshot {
   if (!object(value) || !nonnegativeInteger(value.tick) || !Array.isArray(value.cores) || value.cores.length > CORE_RULES.count ||
       !Array.isArray(value.scores) || value.scores.length > MAX_PLAYERS || !Array.isArray(value.events) || value.events.length > CORE_RULES.eventLimit) return false;
   if (value.match !== undefined && !validMatch(value.match, value.tick)) return false;
+  if (value.extraction !== undefined && !validExtraction(value.extraction, value.tick, value.match)) return false;
   const position = (p: unknown) => object(p) && finite(p.x) && finite(p.y) && p.x >= 0 && p.x <= 960 && p.y >= 0 && p.y <= 640;
   const coreId = (id: unknown) => typeof id === 'string' && /^core-[1-9]\d{0,14}$/.test(id);
   const multiplier = (m: unknown) => Number.isInteger(m) && (m as number) >= 1 && (m as number) <= CORE_RULES.maxMultiplier;
@@ -199,7 +203,7 @@ function validResults(value: unknown): value is MatchResults {
   for (let i = 0; i < value.rankings.length; i++) {
     const row = value.rankings[i];
     if (!object(row) || !identifier(row.id) || ids.has(row.id) || !Number.isInteger(row.slot) || (row.slot as number) < 1 || (row.slot as number) > 4 ||
-        !nonnegativeInteger(row.score) || row.score > previousScore || !nonnegativeInteger(row.coresCollected) ||
+        (row.extractionOutcome !== undefined && !['extracted', 'locked_down', 'dead'].includes(row.extractionOutcome as string)) || !nonnegativeInteger(row.score) || row.score > previousScore || !nonnegativeInteger(row.coresCollected) ||
         row.rank !== (row.score === previousScore ? previousRank : i + 1)) return false;
     ids.add(row.id); previousScore = row.score; previousRank = row.rank as number;
   }
@@ -215,3 +219,23 @@ function validMatch(value: unknown, tick: number): value is MatchState {
 }
 
 export * from './configuration.ts';
+
+function validExtraction(value: unknown, tick: number, match: unknown): value is ExtractionState {
+  if (!object(value) || !object(match) || !nonnegativeInteger(value.opensAtTick) || !nonnegativeInteger(value.closesAtTick) ||
+      value.opensAtTick >= value.closesAtTick || value.closesAtTick !== match.durationTicks ||
+      value.remainingTicks !== Math.max(0, value.closesAtTick - tick) || !object(value.zone) ||
+      value.zone.x !== EXTRACTION_RULES.zone.x || value.zone.y !== EXTRACTION_RULES.zone.y || value.zone.radius !== EXTRACTION_RULES.zone.radius ||
+      value.phase !== (tick >= value.closesAtTick ? 'lockdown' : tick >= value.opensAtTick ? 'open' : 'closed') ||
+      !Array.isArray(value.players) || value.players.length > MAX_PLAYERS) return false;
+  const ids = new Set<string>();
+  for (const player of value.players) {
+    if (!object(player) || !identifier(player.id) || ids.has(player.id) || !['alive', 'extracted', 'locked_down', 'dead'].includes(player.outcome as string)) return false;
+    if (player.outcome === 'extracted') {
+      if (!nonnegativeInteger(player.extractedAtTick) || player.extractedAtTick < value.opensAtTick || player.extractedAtTick > tick || player.extractedAtTick > value.closesAtTick) return false;
+    } else if (player.extractedAtTick !== null) return false;
+    if (tick < value.closesAtTick && (player.outcome === 'locked_down' || player.outcome === 'dead')) return false;
+    if (tick >= value.closesAtTick && player.outcome === 'alive') return false;
+    ids.add(player.id);
+  }
+  return true;
+}

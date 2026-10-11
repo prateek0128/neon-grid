@@ -3,6 +3,10 @@ import { parseRoomResult } from '@neon/protocol';
 import type { RoomArena } from '@neon/protocol';
 
 export type RoomAuthorization = { id: string; slot: number; host?: boolean; revision?: number };
+export type AuthorityFailure = 'lease_busy' | 'rpc_permission' | 'rpc_failure' | 'invalid_response';
+export class RoomAuthorityError extends Error {
+  constructor(readonly reason: AuthorityFailure) { super('Room authority unavailable.'); }
+}
 export type RoomStore = {
   returnLobby?(token: string, roomId: string, revision: number): Promise<boolean>;
   tick(instanceId: string, connectedMembers: string[]): Promise<RoomArena[]>;
@@ -21,8 +25,10 @@ export function createSupabaseRooms(url: string, publicKey: string, serverKey: s
       return result.ok && 'room' in result && result.room.status === 'LOBBY';
     },
     async tick(instanceId, connectedMembers) {
-      const { data, error } = await operations.rpc('ng_server_tick', { p_instance_id: instanceId, p_connected_members: connectedMembers });
-      if (error || !data?.ok || !Array.isArray(data.arenas)) throw new Error('Room authority unavailable.');
+      const { data, error } = await (async () => await operations.rpc('ng_server_tick', { p_instance_id: instanceId, p_connected_members: connectedMembers }))()
+        .catch(() => { throw new RoomAuthorityError('rpc_failure'); });
+      if (error) throw new RoomAuthorityError(error.code === '42501' ? 'rpc_permission' : 'rpc_failure');
+      if (!data?.ok || !Array.isArray(data.arenas)) throw new RoomAuthorityError(data?.code === 'SERVER_BUSY' ? 'lease_busy' : 'invalid_response');
       return data.arenas as RoomArena[];
     },
     async authorize(token, roomId, matchId, instanceId) {

@@ -5,7 +5,8 @@ import { serverConfiguration } from './config.ts';
 
 const config = serverConfiguration(process.env);
 const server = createGameServer({ verifyToken: createSupabaseVerifier(config.url, config.key), allowedOrigins: config.origins,
-  rooms: createSupabaseRooms(config.url, config.key, config.serverKey), matchDurationTicks: config.matchDurationTicks, allowTestArena: config.allowTestArena });
+  rooms: createSupabaseRooms(config.url, config.key, config.serverKey), matchDurationTicks: config.matchDurationTicks, extractionWindowTicks: config.extractionWindowTicks, allowTestArena: config.allowTestArena,
+  diagnostic: event => console.info('NEON GRID connection', JSON.stringify(event)) });
 let stopping = false;
 async function stop() { if (stopping) return; stopping = true; await server.close(); }
 server.http.on('error', () => {

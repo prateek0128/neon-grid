@@ -5,8 +5,9 @@ import { pruneGameplayEvents } from './gameplay.ts';
 import type { GameplayState } from './gameplay.ts';
 import { playerAlive } from './hazards.ts';
 
-export function activateAbility(state: GameplayState, playerId: string, ability: AbilityKind, position: Vector, direction: Vector | null): 'COOLDOWN' | 'NO_DIRECTION' | 'NOT_MEMBER' | 'DEAD' | 'MATCH_ENDED' | null {
+export function activateAbility(state: GameplayState, playerId: string, ability: AbilityKind, position: Vector, direction: Vector | null): 'COOLDOWN' | 'NO_DIRECTION' | 'NOT_MEMBER' | 'DEAD' | 'EXTRACTED' | 'MATCH_ENDED' | null {
   if (state.match.phase !== 'ACTIVE') return 'MATCH_ENDED';
+  if (state.extraction?.players.find(p => p.id === playerId)?.outcome === 'extracted') return 'EXTRACTED';
   const current = state.abilities.find(a => a.id === playerId);
   if (!current) return 'NOT_MEMBER';
   if (state.match.phase !== 'ACTIVE' || !playerAlive(state, playerId)) return 'DEAD';

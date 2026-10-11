@@ -30,6 +30,16 @@ export function Arena({ snapshot, playerId }: { snapshot: Snapshot | null; playe
       context!.stroke();
       context!.strokeStyle = '#395266';
       context!.strokeRect(1, 1, ARENA.width - 2, ARENA.height - 2);
+      const extraction = current.snapshot?.gameplay?.extraction;
+      if (extraction) {
+        context!.fillStyle = extraction.phase === 'open' ? '#29e6c433' : '#9274ff18';
+        context!.strokeStyle = extraction.phase === 'open' ? '#29e6c4' : '#9274ff';
+        context!.lineWidth = 3; context!.beginPath();
+        context!.arc(extraction.zone.x, extraction.zone.y, extraction.zone.radius, 0, Math.PI * 2);
+        context!.fill(); context!.stroke(); context!.fillStyle = '#e0fff8';
+        context!.font = 'bold 14px system-ui'; context!.textAlign = 'center';
+        context!.fillText(extraction.phase === 'open' ? 'EXTRACT' : 'EXIT', extraction.zone.x, extraction.zone.y + 5);
+      }
       const gameplay = current.snapshot?.gameplay;
       for (const laser of gameplay?.hazards ?? []) {
         if (laser.phase === 'idle') continue;
@@ -105,7 +115,7 @@ export function Arena({ snapshot, playerId }: { snapshot: Snapshot | null; playe
         }
         context!.font = 'bold 14px system-ui'; context!.textAlign = 'center';
         context!.globalAlpha = 1;
-        context!.fillText(vital?.life === 'respawning' && gameplay ? `RESPAWN ${Math.max(0, Math.ceil((vital.respawnAtTick - gameplay.tick) / TICK_RATE))}s` : `P${player.slot}${player.id === current.playerId ? ' · YOU' : ''}`, position.x, position.y - 28);
+        context!.fillText(gameplay?.extraction?.players.find(p => p.id === player.id)?.outcome === 'extracted' ? `P${player.slot} · EXTRACTED` : vital?.life === 'respawning' && gameplay ? `RESPAWN ${Math.max(0, Math.ceil((vital.respawnAtTick - gameplay.tick) / TICK_RATE))}s` : `P${player.slot}${player.id === current.playerId ? ' · YOU' : ''}`, position.x, position.y - 28);
         context!.globalAlpha = 1;
       }
       frame = requestAnimationFrame(render);

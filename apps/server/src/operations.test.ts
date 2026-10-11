@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
+import { request } from 'node:http';
 import { connect, type AddressInfo } from 'node:net';
 import { expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import { createGameServer } from './server.ts';
+import { RoomAuthorityError } from './rooms.ts';
 const origin = 'https://web.example.com';
 async function listen(server: ReturnType<typeof createGameServer>) {
   server.http.listen(0, '127.0.0.1'); await once(server.http, 'listening');
@@ -80,4 +82,125 @@ it('removes a peer that stops answering heartbeat pings', async () => {
     const closed = once(ws, 'close'); await vi.advanceTimersByTimeAsync(20001); await closed;
     expect((await fetch(`${url}/health`)).status).toBe(200);
   } finally { ws.terminate(); await server.close(); vi.useRealTimers(); }
+});
+it('accepts exactly /ws with the production Origin and records 101 without granting authentication', async () => {
+  const diagnostic = vi.fn(); const verifyToken = vi.fn(async () => null);
+  const server = createGameServer({ allowedOrigins: ['https://neon-grid-tau.vercel.app'], allowTestArena: true, verifyToken, diagnostic });
+  const url = await listen(server); const ws = new WebSocket(url.replace('http:', 'ws:') + '/ws', { origin: 'https://neon-grid-tau.vercel.app' });
+  try {
+    const upgrade = once(ws, 'upgrade'); await once(ws, 'open');
+    expect((await upgrade)[0].statusCode).toBe(101); expect(verifyToken).not.toHaveBeenCalled();
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'upgrade_received', path: 'ws', originAllowed: true });
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'upgrade_accepted', status: 101 });
+    const closed = once(ws, 'close'); ws.close(1000); await closed;
+    await vi.waitFor(() => expect(diagnostic).toHaveBeenCalledWith({ event: 'socket_closed', code: 1000, authenticated: false }));
+  } finally { ws.terminate(); await server.close(); }
+});
+it.each(['/ws/', '/api/ws', '/ws?access_token=private-test-sentinel'])('rejects invalid upgrade path %s without logging raw request data', async path => {
+  const diagnostic = vi.fn(); const server = createGameServer({ allowedOrigins: [origin], allowTestArena: true, verifyToken: async () => null, diagnostic });
+  const url = await listen(server);
+  try {
+    const ws = new WebSocket(url.replace('http:', 'ws:') + path, { origin });
+    const [error] = await once(ws, 'error'); expect(String(error)).toContain('403');
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'upgrade_rejected', reason: 'path', status: 403 });
+    expect(JSON.stringify(diagnostic.mock.calls).includes('private-test-sentinel')).toBe(false);
+  } finally { await server.close(); }
+});
+it('distinguishes a forbidden production Origin from an unavailable authority', async () => {
+  const diagnostic = vi.fn(); const server = createGameServer({ allowedOrigins: [origin], verifyToken: async () => null, diagnostic,
+    rooms: { authorize: async () => null, tick: async () => { throw Error('private-dependency-detail'); } } });
+  const url = await listen(server);
+  try {
+    for (const requestedOrigin of ['https://neon-grid-tau.vercel.app', origin]) {
+      const ws = new WebSocket(url.replace('http:', 'ws:') + '/ws', { origin: requestedOrigin }); await once(ws, 'error');
+    }
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'upgrade_rejected', reason: 'origin', status: 403 });
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'upgrade_rejected', reason: 'not_ready', status: 503 });
+    expect(JSON.stringify(diagnostic.mock.calls).includes('private-dependency-detail')).toBe(false);
+  } finally { await server.close(); }
+});
+it('records a malformed handshake safely and leaves the server available', async () => {
+  const diagnostic = vi.fn(); const server = createGameServer({ allowedOrigins: [origin], allowTestArena: true, verifyToken: async () => null, diagnostic });
+  const url = await listen(server);
+  try {
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      const req = request(url + '/ws', { headers: { Origin: origin, Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'private-test-sentinel' } }, response => { response.resume(); resolve(response.statusCode); });
+      req.on('error', reject); req.end();
+    });
+    expect(status).toBe(400); expect(diagnostic).toHaveBeenCalledWith({ event: 'upgrade_rejected', reason: 'handshake', status: 400 });
+    expect(JSON.stringify(diagnostic.mock.calls).includes('private-test-sentinel')).toBe(false);
+    expect((await fetch(url + '/ready')).status).toBe(200);
+  } finally { await server.close(); }
+});
+it('reports a busy lease as unhealthy authority and recovers without bypassing readiness', async () => {
+  let busy = true; const diagnostic = vi.fn();
+  const server = createGameServer({ allowedOrigins: [origin], verifyToken: async () => null, diagnostic,
+    rooms: { authorize: async () => null, tick: async () => { if (busy) throw new RoomAuthorityError('lease_busy'); return []; } } });
+  const url = await listen(server);
+  try {
+    expect((await fetch(url + '/ready')).status).toBe(503);
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'readiness', condition: 'authority_unhealthy', syncInFlight: false, authorityFailure: 'lease_busy' });
+    busy = false;
+    await vi.waitFor(async () => expect((await fetch(url + '/ready')).status).toBe(200), { timeout: 2000 });
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'readiness', condition: 'ready', syncInFlight: false });
+  } finally { await server.close(); }
+});
+it('reports stale authority while a renewal hangs and keeps public readiness details private', async () => {
+  vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+  let clock = 0; const now = vi.spyOn(performance, 'now').mockImplementation(() => clock);
+  let pending = false; const diagnostic = vi.fn();
+  const server = createGameServer({ allowedOrigins: [origin], verifyToken: async () => null, diagnostic,
+    rooms: { authorize: async () => null, tick: async () => pending ? new Promise(() => {}) : [] } });
+  const url = await listen(server);
+  try {
+    expect((await fetch(url + '/ready')).status).toBe(200);
+    pending = true; clock = 1000; await vi.advanceTimersByTimeAsync(1000);
+    clock = 5001; await vi.advanceTimersByTimeAsync(1000);
+    const response = await fetch(url + '/ready'); expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ status: 'not_ready', protocol: 1 });
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'readiness', condition: 'authority_stale', syncInFlight: true });
+  } finally { await server.close(); now.mockRestore(); vi.useRealTimers(); }
+});
+
+it.each(['rpc_permission', 'rpc_failure', 'invalid_response'] as const)('reports %s as failed reconciliation without exposing dependency details', async reason => {
+  const diagnostic = vi.fn();
+  const server = createGameServer({ allowedOrigins: [origin], verifyToken: async () => null, diagnostic,
+    rooms: { authorize: async () => null, tick: async () => { throw new RoomAuthorityError(reason); } } });
+  const url = await listen(server);
+  try {
+    expect((await fetch(url + '/ready')).status).toBe(503);
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'authority_unavailable', reason });
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'readiness', condition: 'authority_unhealthy', syncInFlight: false, authorityFailure: reason });
+    expect(diagnostic).not.toHaveBeenCalledWith({ event: 'authority_recovered' });
+  } finally { await server.close(); }
+});
+it('preserves pending and failed readiness diagnostics after connection log exhaustion', async () => {
+  const diagnostic = vi.fn(); let fail!: (error: Error) => void;
+  const server = createGameServer({ allowedOrigins: [origin], verifyToken: async () => null, diagnostic,
+    rooms: { authorize: async () => null, tick: () => new Promise((_resolve, reject) => { fail = reject; }) } });
+  const url = await listen(server);
+  try {
+    for (let i = 0; i < 31; i++) {
+      const ws = new WebSocket(url.replace('http:', 'ws:') + '/invalid?private-test-sentinel', { origin });
+      await once(ws, 'error');
+    }
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'diagnostics_limited', scope: 'connections' });
+    expect((await fetch(url + '/ready')).status).toBe(503);
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'readiness', condition: 'authority_pending', syncInFlight: true });
+    fail(new RoomAuthorityError('lease_busy'));
+    await vi.waitFor(() => expect(diagnostic).toHaveBeenCalledWith({ event: 'authority_unavailable', reason: 'lease_busy' }));
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'readiness', condition: 'authority_unhealthy', syncInFlight: false, authorityFailure: 'lease_busy' });
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('private-test-sentinel');
+  } finally { await server.close(); }
+});
+it('does not report recovery if arena processing fails after a successful RPC', async () => {
+  const diagnostic = vi.fn();
+  const server = createGameServer({ allowedOrigins: [origin], verifyToken: async () => null, diagnostic,
+    rooms: { authorize: async () => null, tick: async () => [{ roomId: randomUUID(), matchId: randomUUID(), members: null } as unknown as import('@neon/protocol').RoomArena] } });
+  const url = await listen(server);
+  try {
+    expect((await fetch(url + '/ready')).status).toBe(503);
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'readiness', condition: 'authority_unhealthy', syncInFlight: false, authorityFailure: 'unknown' });
+    expect(diagnostic).not.toHaveBeenCalledWith({ event: 'authority_recovered' });
+  } finally { await server.close(); }
 });
