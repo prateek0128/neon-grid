@@ -102,3 +102,18 @@ it('rejects inconsistent health, lifecycle, hazard timing and duplicate event se
     { ...gameplay, healthEvents: [{ ...event, amount: 100 }] },
   ]) expect(parseServerMessage(JSON.stringify({ ...envelope, gameplay: invalid }))).toBeNull();
 });
+
+const replay = { type: 'lifecycle', version: 1, sessionId: input.sessionId, sequence: 2, matchId: input.sessionId, action: 'replay' };
+it('accepts replay intent only and rejects forged lifecycle outcomes', () => {
+  expect(parseClientMessage(JSON.stringify(replay))).toEqual(replay);
+  for (const value of [{ ...replay, action: 'finish' }, { ...replay, phase: 'RESULTS' }, { ...replay, results: [] }, { ...replay, score: 999 }, { ...replay, matchId: 'fake' }, { ...replay, sequence: -1 }, { ...input, type: 'match_complete' }]) expect(parseClientMessage(JSON.stringify(value))).toBeNull();
+});
+it('validates immutable results, rank order, ties, winner lists and clock consistency', () => {
+  const results = { matchId: input.sessionId, durationTicks: 30, outcome: 'winner', winnerIds: [input.sessionId], rankings: [{ id: input.sessionId, slot: 1, rank: 1, score: 100, coresCollected: 1 }] };
+  const event = { type: 'match_complete', version: 1, results };
+  expect(parseServerMessage(JSON.stringify(event))).toEqual(event);
+  for (const value of [{ ...results, outcome: 'tie' }, { ...results, winnerIds: [] }, { ...results, rankings: [...results.rankings, ...results.rankings] }, { ...results, rankings: [{ ...results.rankings[0], rank: 2 }] }, { ...results, rankings: [{ ...results.rankings[0], coresCollected: -1 }] }]) expect(parseServerMessage(JSON.stringify({ ...event, results: value }))).toBeNull();
+  const snapshot = { type: 'snapshot', version: 1, epoch: input.sessionId, tick: 30, players: [], gameplay: { tick: 30, cores: [], scores: [], events: [], match: { id: input.sessionId, durationTicks: 30, phase: 'RESULTS', endedAtTick: 30, results } } };
+  expect(parseServerMessage(JSON.stringify(snapshot))).not.toBeNull();
+  expect(parseServerMessage(JSON.stringify({ ...snapshot, gameplay: { ...snapshot.gameplay, match: { ...snapshot.gameplay.match, endedAtTick: 29 } } }))).toBeNull();
+});

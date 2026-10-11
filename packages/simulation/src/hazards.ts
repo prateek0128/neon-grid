@@ -35,6 +35,7 @@ function event(state: GameplayState, player: GameplayPlayer, kind: HealthEvent['
   state.healthEvents.push({ sequence: state.nextEvent++, tick: state.tick, playerId: player.id, kind, hazardId, position: { ...player.position }, health, amount });
 }
 export function advanceHazards(state: GameplayState, players: GameplayPlayer[]) {
+  if (state.match.phase !== 'ACTIVE') return;
   const laser = laserAtTick(state.tick);
   if (state.hazards[0]?.id !== laser.id) state.hazardHits.clear();
   state.hazards = [laser];

@@ -5,10 +5,11 @@ import { pruneGameplayEvents } from './gameplay.ts';
 import type { GameplayState } from './gameplay.ts';
 import { playerAlive } from './hazards.ts';
 
-export function activateAbility(state: GameplayState, playerId: string, ability: AbilityKind, position: Vector, direction: Vector | null): 'COOLDOWN' | 'NO_DIRECTION' | 'NOT_MEMBER' | 'DEAD' | null {
+export function activateAbility(state: GameplayState, playerId: string, ability: AbilityKind, position: Vector, direction: Vector | null): 'COOLDOWN' | 'NO_DIRECTION' | 'NOT_MEMBER' | 'DEAD' | 'MATCH_ENDED' | null {
+  if (state.match.phase !== 'ACTIVE') return 'MATCH_ENDED';
   const current = state.abilities.find(a => a.id === playerId);
   if (!current) return 'NOT_MEMBER';
-  if (!playerAlive(state, playerId)) return 'DEAD';
+  if (state.match.phase !== 'ACTIVE' || !playerAlive(state, playerId)) return 'DEAD';
   if (ability === 'dash') {
     if (state.tick < current.dashReadyAtTick) return 'COOLDOWN';
     if (!direction || !Number.isFinite(direction.x) || !Number.isFinite(direction.y) ||
@@ -29,7 +30,7 @@ export function activateAbility(state: GameplayState, playerId: string, ability:
 }
 
 export function advanceAbilityPosition(state: GameplayState, playerId: string, position: Vector, movement: Vector) {
-  if (!playerAlive(state, playerId)) return { ...position };
+  if (state.match.phase !== 'ACTIVE' || !playerAlive(state, playerId)) return { ...position };
   const ability = state.abilities.find(a => a.id === playerId);
   const dashing = ability && state.tick < ability.dashUntilTick;
   const direction = dashing ? ability.dashDirection : normalizeMovement(movement);
@@ -38,6 +39,7 @@ export function advanceAbilityPosition(state: GameplayState, playerId: string, p
 }
 
 export function cancelDash(state: GameplayState, playerId: string) {
+  if (state.match.phase !== 'ACTIVE') return;
   const ability = state.abilities.find(a => a.id === playerId);
   if (ability) ability.dashUntilTick = Math.min(ability.dashUntilTick, state.tick);
 }

@@ -10,13 +10,15 @@ import type { VerifyToken } from './auth.ts';
 import type { RoomStore } from './rooms.ts';
 
 type Player = PlayerState & { userId: string; movement: Vector; lastInputAt: number; lastDirection: Vector | null; lastDirectionAt: number; disconnectedAt: number | null; socket: WebSocket | null };
-type ArenaState = { id: string; roomId: string | null; players: Map<string, Player>; eligible: Map<string, { id: string; slot: number }>; gameplay?: GameplayState };
-type Connection = { player: Player | null; arena: ArenaState | null; sessionId: string; expiresAt: number; authenticating: boolean; tokens: number; rateAt: number; alive: boolean; authTimer: ReturnType<typeof setTimeout> };
+type ArenaState = { id: string; roomId: string | null; players: Map<string, Player>; eligible: Map<string, { id: string; slot: number }>; gameplay?: GameplayState; lifecycleBusy?: boolean };
+type Connection = { player: Player | null; arena: ArenaState | null; sessionId: string; expiresAt: number; authenticating: boolean; accessToken: string | null; lifecycleBusy: boolean; tokens: number; rateAt: number; alive: boolean; authTimer: ReturnType<typeof setTimeout> };
 
-export function createGameServer(options: { verifyToken: VerifyToken; allowedOrigins: string[]; rooms?: RoomStore; allowTestArena?: boolean }) {
+export function createGameServer(options: { verifyToken: VerifyToken; allowedOrigins: string[]; rooms?: RoomStore; allowTestArena?: boolean; matchDurationTicks?: number }) {
+  if (options.matchDurationTicks !== undefined && (!Number.isSafeInteger(options.matchDurationTicks) || options.matchDurationTicks < 1)) throw new Error('Invalid match duration.');
   const connections = new Map<WebSocket, Connection>();
   const epoch = randomUUID();
   const testArena: ArenaState = { id: epoch, roomId: null, players: new Map(), eligible: new Map() };
+  const closedMatches = new Set<string>();
   const arenas = new Map<string, ArenaState>();
   if (options.allowTestArena) arenas.set(epoch, testArena);
   let roomsHealthy = false;
@@ -48,7 +50,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
     ws.close(code === 'SESSION_IN_USE' ? 4009 : 1008, code);
   }
   function snapshot(arena: ArenaState): Snapshot {
-    return { type: 'snapshot', version: PROTOCOL_VERSION, epoch: arena.id, tick, players: [...arena.players.values()].map(p => ({ id: p.id, slot: p.slot, position: { ...p.position }, connected: p.connected, lastSequence: p.lastSequence })),
+    return { type: 'snapshot', version: PROTOCOL_VERSION, epoch: arena.gameplay?.match.id ?? arena.id, tick, players: [...arena.players.values()].map(p => ({ id: p.id, slot: p.slot, position: { ...p.position }, connected: p.connected, lastSequence: p.lastSequence })),
       ...(arena.gameplay ? { gameplay: gameplaySnapshot(arena.gameplay) } : {}) };
   }
   function gameplayPlayers(arena: ArenaState, previousPositions?: Map<string, Vector>): GameplayPlayer[] {
@@ -80,11 +82,13 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
       if (closing) return;
       roomsHealthy = true;
       lastRoomSync = performance.now();
-      const activeMatches = new Set(states.map(state => state.matchId));
+      const activeMatches = new Set(states.filter(state => !closedMatches.has(state.matchId)).map(state => state.matchId));
+      for (const id of closedMatches) if (!states.some(state => state.matchId === id)) closedMatches.delete(id);
       for (const state of states) {
+        if (closedMatches.has(state.matchId)) continue;
         let arena = arenas.get(state.matchId);
         if (!arena) {
-          arena = { id: state.matchId, roomId: state.roomId, players: new Map(), eligible: new Map(), gameplay: createGameplay() };
+          arena = { id: state.matchId, roomId: state.roomId, players: new Map(), eligible: new Map(), gameplay: createGameplay(options.matchDurationTicks, state.matchId) };
           arenas.set(state.matchId, arena);
         }
         arena.eligible = new Map(state.members.map(m => [m.userId, { id: m.id, slot: m.slot }]));
@@ -106,14 +110,14 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
   const roomTimer = setInterval(() => { void syncRooms(); }, 1000);
   void syncRooms();
   wss.on('connection', (ws: WebSocket) => {
-    const connection: Connection = { player: null, arena: null, sessionId: randomUUID(), expiresAt: 0, authenticating: false, tokens: 90, rateAt: performance.now(), alive: true,
+    const connection: Connection = { player: null, arena: null, sessionId: randomUUID(), expiresAt: 0, authenticating: false, accessToken: null, lifecycleBusy: false, tokens: 90, rateAt: performance.now(), alive: true,
       authTimer: setTimeout(() => reject(ws, 'AUTH_REQUIRED', 'Authenticate within five seconds.'), 5000) };
     connections.set(ws, connection);
     ws.on('error', () => { /* Socket close handles player cleanup. Do not log payloads or tokens. */ });
     ws.on('pong', () => { connection.alive = true; });
     ws.on('close', () => {
       clearTimeout(connection.authTimer);
-      connections.delete(ws);
+      connections.delete(ws); connection.accessToken = null;
       const player = connection.player;
       if (player?.socket === ws) {
         player.socket = null;
@@ -148,6 +152,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
           if (connection.arena?.roomId && (message.roomId !== connection.arena.roomId || message.matchId !== connection.arena.id)) {
             reject(ws, 'INVALID_SESSION', 'Room identity cannot change on renewal.'); return;
           }
+          connection.accessToken = message.accessToken;
           connection.expiresAt = identity.expiresAt;
           send(ws, { type: 'authenticated', version: PROTOCOL_VERSION });
           return;
@@ -186,9 +191,10 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
         player.lastSequence = -1;
         player.lastDirection = null;
         connection.player = player;
+        connection.accessToken = message.accessToken;
         connection.expiresAt = identity.expiresAt;
         clearTimeout(connection.authTimer);
-        send(ws, { type: 'welcome', version: PROTOCOL_VERSION, playerId: player.id, sessionId: connection.sessionId, epoch: arena.id, tickRate: TICK_RATE });
+        send(ws, { type: 'welcome', version: PROTOCOL_VERSION, playerId: player.id, sessionId: connection.sessionId, epoch: arena.gameplay?.match.id ?? arena.id, tickRate: TICK_RATE });
         broadcast();
         return;
       }
@@ -197,6 +203,43 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
       if (connection.expiresAt <= Date.now() || message.sessionId !== connection.sessionId) { reject(ws, 'INVALID_SESSION', 'Session expired or incorrect.'); return; }
       if (message.sequence <= player.lastSequence) { reject(ws, 'STALE_SEQUENCE', 'Input sequence must increase.'); return; }
       player.lastSequence = message.sequence;
+      if (message.type === 'lifecycle') {
+        const arena = connection.arena;
+        const deny = (reason: import('@neon/protocol').LifecycleRejected['reason']) => send(ws, { type: 'lifecycle_rejected', version: PROTOCOL_VERSION, reason });
+        if (!arena?.gameplay || !arena.roomId || arenas.get(arena.id) !== arena) { deny('INVALID_TRANSITION'); return; }
+        if (message.matchId !== arena.gameplay.match.id) { deny('STALE_MATCH'); return; }
+        if (message.action === 'replay' && arena.gameplay.match.phase !== 'RESULTS') { deny('INVALID_TRANSITION'); return; }
+        if (connection.lifecycleBusy || arena.lifecycleBusy) { deny('BUSY'); return; }
+        if (!roomsHealthy || now - lastRoomSync > 5000 || !connection.accessToken) { deny('ROOM_UNAVAILABLE'); return; }
+        connection.lifecycleBusy = true; arena.lifecycleBusy = true;
+        try {
+          const authorization = await options.rooms!.authorize(connection.accessToken, arena.roomId, arena.id, epoch);
+          if (ws.readyState !== WebSocket.OPEN || closing || arenas.get(arena.id) !== arena) return;
+          if (!authorization || authorization.id !== player.id || !authorization.host) { deny('HOST_ONLY'); return; }
+          if (connection.expiresAt <= Date.now() || arena.eligible.get(player.userId)?.id !== player.id) { deny('HOST_ONLY'); return; }
+          if (arena.gameplay.match.id !== message.matchId || (message.action === 'replay' && arena.gameplay.match.phase !== 'RESULTS')) { deny('STALE_MATCH'); return; }
+          if (!roomsHealthy || performance.now() - lastRoomSync > 5000) { deny('ROOM_UNAVAILABLE'); return; }
+          if (message.action === 'return') {
+            if (!options.rooms?.returnLobby || authorization.revision === undefined || !await options.rooms.returnLobby(connection.accessToken, arena.roomId, authorization.revision)) { deny('ROOM_UNAVAILABLE'); return; }
+            closedMatches.add(arena.id);
+            if (arenas.get(arena.id) === arena) {
+              arenas.delete(arena.id);
+              for (const member of arena.players.values()) if (member.socket) reject(member.socket, 'MATCH_UNAVAILABLE', 'Match ended. Return to the lobby.');
+            }
+            return;
+          }
+          if (gameplayPlayers(arena).filter(p => p.connected).length < 2) { deny('NOT_READY'); return; }
+          arena.gameplay = createGameplay(options.matchDurationTicks);
+          for (const member of arena.players.values()) {
+            member.position = spawnPosition(member.slot); member.movement = { x: 0, y: 0 }; member.lastDirection = null; member.lastSequence = -1;
+          }
+          reconcileGameplay(arena.gameplay, gameplayPlayers(arena));
+          // Reconnect creates new session IDs. Packets queued on old sockets cannot enter the new generation.
+          for (const member of arena.players.values()) member.socket?.close(1012, 'New match generation');
+        } catch { deny('ROOM_UNAVAILABLE'); }
+        finally { connection.lifecycleBusy = false; arena.lifecycleBusy = false; }
+        return;
+      }
       if (message.type === 'ability') {
         const arena = connection.arena;
         if (!arena?.roomId || !arena.gameplay || arenas.get(arena.id) !== arena) { reject(ws, 'MATCH_UNAVAILABLE', 'Abilities require an active room match.'); return; }
@@ -209,7 +252,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
         else broadcast();
         return;
       }
-      if (connection.arena?.gameplay && !playerAlive(connection.arena.gameplay, player.id)) {
+      if (connection.arena?.gameplay && (connection.arena.gameplay.match.phase !== 'ACTIVE' || !playerAlive(connection.arena.gameplay, player.id))) {
         player.movement = { x: 0, y: 0 }; player.lastDirection = null; return;
       }
       player.movement = message.movement;
@@ -233,6 +276,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
       tick += 1;
       for (const arena of arenas.values()) {
         const healthy = !arena.roomId || (roomsHealthy && now - lastRoomSync <= 5000);
+        if (arena.gameplay?.match.phase === 'RESULTS') continue;
         const previousPositions = new Map([...arena.players.values()].map(p => [p.id, { ...p.position }]));
         for (const player of arena.players.values()) {
           if (!healthy) player.movement = { x: 0, y: 0 };
@@ -247,6 +291,13 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
         if (healthy && arena.gameplay) {
           const currentPlayers = gameplayPlayers(arena, previousPositions);
           advanceGameplay(arena.gameplay, currentPlayers);
+          if (arena.gameplay.match.results !== null) {
+            for (const member of arena.players.values()) {
+              member.movement = { x: 0, y: 0 }; member.lastDirection = null;
+              if (member.socket) send(member.socket, { type: 'match_complete', version: PROTOCOL_VERSION, results: arena.gameplay.match.results! });
+            }
+            broadcast();
+          }
           for (const player of arena.players.values()) {
             const current = currentPlayers.find(p => p.id === player.id);
             if (current) {

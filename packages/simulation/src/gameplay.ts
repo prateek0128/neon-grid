@@ -1,17 +1,18 @@
-import { CORE_RULES, HAZARD_RULES } from '@neon/protocol';
-import type { AbilityEvent, AbilityState, CoreState, GameplaySnapshot, HealthEvent, LaserState, PlayerState, PlayerVitals, Vector } from '@neon/protocol';
+import { CORE_RULES, HAZARD_RULES, MATCH_RULES } from '@neon/protocol';
+import type { AbilityEvent, AbilityState, CoreState, GameplaySnapshot, HealthEvent, LaserState, PlayerState, PlayerVitals, Vector, MatchState, MatchRanking } from '@neon/protocol';
 import { ARENA, spawnPosition } from './index.ts';
 import { advanceHazards, laserAtTick, playerAlive } from './hazards.ts';
 
 export { CORE_RULES } from '@neon/protocol';
 type Core = CoreState & { respawnAtTick: number };
-export type GameplayState = Omit<GameplaySnapshot, 'cores' | 'abilities' | 'abilityEvents' | 'vitals' | 'hazards' | 'healthEvents'> & {
+export type GameplayState = Omit<GameplaySnapshot, 'cores' | 'abilities' | 'abilityEvents' | 'vitals' | 'hazards' | 'healthEvents' | 'match'> & {
   cores: Core[]; abilities: AbilityState[]; abilityEvents: AbilityEvent[]; vitals: PlayerVitals[]; hazards: LaserState[];
-  healthEvents: HealthEvent[]; hazardHits: Map<string, string>; nextCore: number; nextEvent: number };
+  match: MatchState; participants: Map<string, Omit<MatchRanking, 'rank'>>; healthEvents: HealthEvent[]; hazardHits: Map<string, string>; nextCore: number; nextEvent: number };
 export type GameplayPlayer = Pick<PlayerState, 'id' | 'slot' | 'position' | 'connected'> & { previousPosition?: Vector };
 
-export function createGameplay(): GameplayState {
-  return { tick: 0, cores: [], scores: [], events: [], abilities: [], abilityEvents: [], vitals: [], hazards: [laserAtTick(0)], healthEvents: [], hazardHits: new Map(), nextCore: 1, nextEvent: 1 };
+export function createGameplay(durationTicks: number = MATCH_RULES.durationTicks, generationId: string = crypto.randomUUID()): GameplayState {
+  if (!Number.isSafeInteger(durationTicks) || durationTicks < 1) throw new Error('Match duration must be a positive number of ticks.');
+  return { match: { id: generationId, phase: 'ACTIVE', durationTicks, endedAtTick: null, results: null }, participants: new Map(), tick: 0, cores: [], scores: [], events: [], abilities: [], abilityEvents: [], vitals: [], hazards: [laserAtTick(0)], healthEvents: [], hazardHits: new Map(), nextCore: 1, nextEvent: 1 };
 }
 
 // The arena has no interior walls. Cell centers are inside its solid boundary.
@@ -35,6 +36,8 @@ function spawn(state: GameplayState, players: GameplayPlayer[], random: () => nu
 }
 
 export function reconcileGameplay(state: GameplayState, players: GameplayPlayer[], random: () => number = Math.random) {
+  if (state.match.phase === 'RESULTS') return;
+  for (const player of players) if (!state.participants.has(player.id)) state.participants.set(player.id, { id: player.id, slot: player.slot, score: 0, coresCollected: 0 });
   const members = new Set(players.map(p => p.id));
   state.scores = state.scores.filter(s => members.has(s.id));
   state.abilities = state.abilities.filter(s => members.has(s.id));
@@ -57,6 +60,7 @@ export function reconcileGameplay(state: GameplayState, players: GameplayPlayer[
 }
 
 export function advanceGameplay(state: GameplayState, players: GameplayPlayer[], random: () => number = Math.random) {
+  if (state.match.phase !== 'ACTIVE') return;
   state.tick++;
   advanceHazards(state, players);
   for (const score of state.scores) if (score.combo && state.tick >= score.comboExpiresAtTick) {
@@ -74,6 +78,7 @@ export function advanceGameplay(state: GameplayState, players: GameplayPlayer[],
     score.combo++;
     score.multiplier = Math.min(score.combo, CORE_RULES.maxMultiplier);
     const points = CORE_RULES.basePoints * score.multiplier;
+    const participant = state.participants.get(winner.id)!; participant.score += points; participant.coresCollected++;
     score.score += points; score.comboExpiresAtTick = state.tick + CORE_RULES.comboWindowTicks;
     state.events.push({ sequence: state.nextEvent++, tick: state.tick, coreId: core.id, playerId: winner.id,
       position: { ...core.position }, points, multiplier: score.multiplier });
@@ -83,10 +88,11 @@ export function advanceGameplay(state: GameplayState, players: GameplayPlayer[],
     const replacement = spawn(state, players, random);
     if (replacement) state.cores[i] = replacement;
   }
+  if (state.tick >= state.match.durationTicks) finalizeGameplay(state);
 }
 
 export function gameplaySnapshot(state: GameplayState): GameplaySnapshot {
-  return { tick: state.tick, cores: state.cores.map(c => ({ id: c.id, position: { ...c.position }, active: c.active })),
+  return { match: structuredClone(state.match), tick: state.tick, cores: state.cores.map(c => ({ id: c.id, position: { ...c.position }, active: c.active })),
     scores: state.scores.map(s => ({ ...s })), events: state.events.map(e => ({ ...e, position: { ...e.position } })),
     abilities: state.abilities.map(a => ({ ...a, dashDirection: { ...a.dashDirection } })),
     abilityEvents: state.abilityEvents.map(e => ({ ...e, position: { ...e.position }, direction: { ...e.direction } })),
@@ -99,4 +105,15 @@ export function pruneGameplayEvents(state: GameplayState) {
   state.events = state.events.filter(e => e.sequence >= oldest);
   state.abilityEvents = state.abilityEvents.filter(e => e.sequence >= oldest);
   state.healthEvents = state.healthEvents.filter(e => e.sequence >= oldest);
+}
+
+export function finalizeGameplay(state: GameplayState): boolean {
+  if (state.match.phase !== 'ACTIVE' || state.tick < state.match.durationTicks) return false;
+  const ordered = [...state.participants.values()].sort((a, b) => b.score - a.score || a.slot - b.slot || a.id.localeCompare(b.id));
+  let previousScore = -1; let rank = 0;
+  const rankings = ordered.map((player, index) => { if (player.score !== previousScore) rank = index + 1; previousScore = player.score; return { ...player, rank }; });
+  const winnerIds = rankings.filter(p => p.rank === 1).map(p => p.id);
+  state.match.phase = 'RESULTS'; state.match.endedAtTick = state.tick;
+  state.match.results = { matchId: state.match.id, durationTicks: state.tick, rankings, winnerIds, outcome: !winnerIds.length ? 'empty' : winnerIds.length === 1 ? 'winner' : 'tie' };
+  return true;
 }

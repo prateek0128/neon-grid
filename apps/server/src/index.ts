@@ -1,3 +1,4 @@
+import { TICK_RATE } from '@neon/protocol';
 import { createSupabaseVerifier } from './auth.ts';
 import { createGameServer } from './server.ts';
 import { createSupabaseRooms } from './rooms.ts';
@@ -5,6 +6,8 @@ import { createSupabaseRooms } from './rooms.ts';
 const url = process.env.SUPABASE_URL;
 const key = process.env.SUPABASE_PUBLISHABLE_KEY;
 const origins = process.env.ALLOWED_ORIGINS?.split(',').map(origin => origin.trim()).filter(Boolean);
+const matchDurationSeconds = Number(process.env.MATCH_DURATION_SECONDS ?? '90');
+if (!Number.isInteger(matchDurationSeconds) || matchDurationSeconds < 10 || matchDurationSeconds > 3600) throw new Error('MATCH_DURATION_SECONDS must be an integer from 10 to 3600.');
 const port = Number(process.env.PORT ?? '8787');
 if (!url || !key || !origins?.length || !Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error('Configure SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, ALLOWED_ORIGINS and a valid PORT. See apps/server/.env.example.');
@@ -29,7 +32,7 @@ if (!serverKey.startsWith('sb_secret_')) {
   } catch { throw new Error('SUPABASE_SERVER_KEY must be a server secret or legacy service-role key.'); }
 }
 const server = createGameServer({ verifyToken: createSupabaseVerifier(url, key), allowedOrigins: origins,
-  rooms: createSupabaseRooms(url, key, serverKey), allowTestArena });
+  rooms: createSupabaseRooms(url, key, serverKey), matchDurationTicks: matchDurationSeconds * TICK_RATE, allowTestArena });
 server.http.listen(port, process.env.HOST ?? '127.0.0.1', () => console.log(`NEON GRID movement server listening on port ${port}`));
 let stopping = false;
 async function stop() { if (stopping) return; stopping = true; await server.close(); }

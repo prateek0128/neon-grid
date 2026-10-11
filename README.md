@@ -83,7 +83,7 @@ Rooms expire after two hours. Cleanup runs while the persistent server is runnin
 
 One server process owns a 10-second runtime lease. This phase does not support horizontal scaling. A replacement process aborts old sessions rather than reconstructing them. Movement position memory lasts 15 seconds after socket closure; the membership identity survives as long as room membership is valid. Auth is checked at socket admission/renewal and token expiration is enforced, but immediate Auth revocation between those checks is not implemented. The client makes one forced refresh attempt after an expired session error.
 
-No lasers, health, damage, extraction, match results, round timer, additional arenas or deployment. Physical-device, non-Chromium and dedicated live-project testing remain required. See `docs/phase2-database.md`, `docs/architecture.md` and `docs/phase2-report.md`.
+Phases 3C and 3D add lasers, health, respawn, a round timer and finalized results. Extraction, additional arenas and production deployment remain outside the implemented scope. Physical-device, non-Chromium and dedicated live-project testing remain required. See `docs/phase2-database.md`, `docs/architecture.md` and `docs/phase2-report.md`.
 
 ## Phase 3A collection rules
 
@@ -93,6 +93,15 @@ The snapshot contains cores, authoritative scores/combos and the latest 16 order
 
 ## Phase 3B abilities
 
-Dash: **Space** or the HUD button. It uses the last accepted non-zero movement direction from the preceding second; move first if no direction is available. The burst lasts 0.2 simulation seconds at 3× speed (up to 126 pixels), with a five-second cooldown measured from activation. It stays inside the existing solid arena boundary and collects cores through the normal server proximity checks. Shield: **E** or the HUD button, active for two simulation seconds with a twelve-second cooldown from activation. It currently supplies defensive state and a synchronized ring; hazards/damage are reserved for Phase 3C.
+Dash: **Space** or the HUD button. It uses the last accepted non-zero movement direction from the preceding second; move first if no direction is available. The burst lasts 0.2 simulation seconds at 3× speed (up to 126 pixels), with a five-second cooldown measured from activation. It stays inside the existing solid arena boundary and collects cores through the normal server proximity checks. Shield: **E** or the HUD button, active for two simulation seconds with a twelve-second cooldown from activation. An active shield blocks one laser collision outcome per activation; Phase 3C adds authoritative damage and respawn.
 
 Cooldowns and shield state are owned by the server tick clock. Disconnect stops a dash but preserves its cooldown; shield/cooldowns continue while the match remains active and healthy. Reconnect restores current state, and a new match clears it. Controls ignore keyboard auto-repeat and editable fields. See `docs/phase3b-report.md` for protocol/security, test results and the live checklist.
+
+
+## Phase 3C and 3D match loop
+
+Lasers warn for 1.5 seconds, activate for one second, and repeat every four seconds after six seconds of opening grace. Each activation applies at most one 50-HP hit or protection block per player. Players start with 100 HP. Death pauses movement, collection and abilities; after three seconds, a safe respawn restores health with 1.5 seconds of protection. Scores persist through death; combos reset.
+
+The server runs a 90-second match by default. Configure `MATCH_DURATION_SECONDS` in `apps/server/.env` (integer 10–3600) and restart the server to change it. The browser receives remaining time and finalized rankings from authoritative snapshots. Final results include score, total cores and competition ranks; tied leaders share victory. Gameplay freezes at completion.
+
+From results, the current host can **Play Again** when at least two members have connected sockets, or **Return to Lobby** even with one remaining member. Replay resets all gameplay and rotates the runtime generation and socket sessions while preserving room and member IDs. The database room stays `IN_MATCH` during results/replay; lobby return uses the existing secured RPC through the server. Results and active gameplay recover on reload while that server process remains alive. No results persistence or horizontal scaling is provided. See `docs/phase3c-report.md` and `docs/phase3d-report.md` for validation and live verification instructions.

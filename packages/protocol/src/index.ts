@@ -14,6 +14,14 @@ export const HAZARD_RULES = { maxHealth: 100, damage: 50, initialDelayTicks: 6 *
   warningTicks: 45, activeTicks: TICK_RATE, intervalTicks: 4 * TICK_RATE, halfWidth: 5,
   respawnTicks: 3 * TICK_RATE, invulnerabilityTicks: 45 } as const;
 
+export const MATCH_RULES = { durationTicks: 90 * TICK_RATE } as const;
+export type MatchRanking = { id: string; slot: number; rank: number; score: number; coresCollected: number };
+export type MatchResults = { matchId: string; durationTicks: number; outcome: 'winner' | 'tie' | 'empty'; winnerIds: string[]; rankings: MatchRanking[] };
+export type MatchState = { id: string; phase: 'ACTIVE' | 'RESULTS'; durationTicks: number; endedAtTick: number | null; results: MatchResults | null };
+export type LifecycleRequest = { type: 'lifecycle'; version: 1; sessionId: string; sequence: number; matchId: string; action: 'replay' | 'return' };
+export type LifecycleRejected = { type: 'lifecycle_rejected'; version: 1; reason: 'HOST_ONLY' | 'INVALID_TRANSITION' | 'STALE_MATCH' | 'NOT_READY' | 'BUSY' | 'ROOM_UNAVAILABLE' };
+export type MatchComplete = { type: 'match_complete'; version: 1; results: MatchResults };
+
 export type Vector = { x: number; y: number };
 export * from './rooms.ts';
 export type Authenticate = { type: 'authenticate'; version: 1; accessToken: string; roomId?: string; matchId?: string };
@@ -21,7 +29,7 @@ export type MovementInput = {
   type: 'input'; version: 1; sessionId: string; sequence: number; movement: Vector;
 };
 export type AbilityRequest = { type: 'ability'; version: 1; sessionId: string; sequence: number; ability: AbilityKind };
-export type ClientMessage = Authenticate | MovementInput | AbilityRequest;
+export type ClientMessage = Authenticate | MovementInput | AbilityRequest | LifecycleRequest;
 export type PlayerState = {
   id: string; slot: number; position: Vector; connected: boolean; lastSequence: number;
 };
@@ -35,14 +43,14 @@ export type LaserState = { id: string; axis: 'x' | 'y'; coordinate: number; phas
 export type PlayerVitals = { id: string; health: number; life: 'alive' | 'respawning'; respawnAtTick: number; invulnerableUntilTick: number; respawnPosition: Vector };
 export type HealthEvent = { sequence: number; tick: number; playerId: string; kind: 'damage' | 'shield_blocked' | 'invulnerable_blocked' | 'death' | 'respawn'; hazardId: string | null; position: Vector; health: number; amount: number };
 export type GameplaySnapshot = { tick: number; cores: CoreState[]; scores: ScoreState[]; events: CollectionEvent[];
-  abilities?: AbilityState[]; abilityEvents?: AbilityEvent[]; hazards?: LaserState[]; vitals?: PlayerVitals[]; healthEvents?: HealthEvent[] };
+  abilities?: AbilityState[]; abilityEvents?: AbilityEvent[]; hazards?: LaserState[]; vitals?: PlayerVitals[]; healthEvents?: HealthEvent[]; match?: MatchState };
 export type Snapshot = { type: 'snapshot'; version: 1; epoch: string; tick: number; players: PlayerState[]; gameplay?: GameplaySnapshot };
 export type ErrorCode = 'INVALID_MESSAGE' | 'AUTH_REQUIRED' | 'INVALID_SESSION' | 'AUTH_UNAVAILABLE' | 'SESSION_IN_USE' | 'ARENA_FULL' | 'STALE_SEQUENCE' | 'RATE_LIMITED' | 'SERVER_CLOSING' | 'ROOM_REQUIRED' | 'NOT_MEMBER' | 'MATCH_UNAVAILABLE' | 'ROOM_UNAVAILABLE';
 export type ProtocolError = { type: 'error'; version: 1; code: ErrorCode; message: string };
 export type Welcome = { type: 'welcome'; version: 1; playerId: string; sessionId: string; epoch: string; tickRate: number };
 export type Authenticated = { type: 'authenticated'; version: 1 };
-export type AbilityRejected = { type: 'ability_rejected'; version: 1; ability: AbilityKind; reason: 'COOLDOWN' | 'NO_DIRECTION' | 'DEAD' };
-export type ServerMessage = Snapshot | ProtocolError | Welcome | Authenticated | AbilityRejected;
+export type AbilityRejected = { type: 'ability_rejected'; version: 1; ability: AbilityKind; reason: 'COOLDOWN' | 'NO_DIRECTION' | 'DEAD' | 'MATCH_ENDED' };
+export type ServerMessage = Snapshot | ProtocolError | Welcome | Authenticated | AbilityRejected | LifecycleRejected | MatchComplete;
 
 function object(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -65,6 +73,8 @@ export function parseClientMessage(raw: string): ClientMessage | null {
       typeof value.accessToken === 'string' && value.accessToken.length >= 20 && value.accessToken.length <= 4096) {
     return value as Authenticate;
   }
+  if (value.type === 'lifecycle' && exactKeys(value, ['type', 'version', 'sessionId', 'sequence', 'matchId', 'action']) &&
+      identifier(value.sessionId) && nonnegativeInteger(value.sequence) && identifier(value.matchId) && (value.action === 'replay' || value.action === 'return')) return value as LifecycleRequest;
   if (value.type === 'ability' && exactKeys(value, ['type', 'version', 'sessionId', 'sequence', 'ability']) &&
       identifier(value.sessionId) && Number.isSafeInteger(value.sequence) && (value.sequence as number) >= 0 &&
       (value.ability === 'dash' || value.ability === 'shield')) return value as AbilityRequest;
@@ -80,10 +90,13 @@ export function parseServerMessage(raw: string): ServerMessage | null {
   let value: unknown;
   try { value = JSON.parse(raw); } catch { return null; }
   if (!object(value) || value.version !== PROTOCOL_VERSION) return null;
+  if (value.type === 'match_complete' && exactKeys(value, ['type', 'version', 'results']) && validResults(value.results)) return value as MatchComplete;
+  if (value.type === 'lifecycle_rejected' && exactKeys(value, ['type', 'version', 'reason']) && typeof value.reason === 'string' &&
+      ['HOST_ONLY', 'INVALID_TRANSITION', 'STALE_MATCH', 'NOT_READY', 'BUSY', 'ROOM_UNAVAILABLE'].includes(value.reason)) return value as LifecycleRejected;
   if (value.type === 'welcome' && identifier(value.playerId) && identifier(value.sessionId) && identifier(value.epoch) && value.tickRate === TICK_RATE) return value as Welcome;
   if (value.type === 'authenticated') return value as Authenticated;
   if (value.type === 'ability_rejected' && exactKeys(value, ['type', 'version', 'ability', 'reason']) &&
-      (value.ability === 'dash' || value.ability === 'shield') && typeof value.reason === 'string' && ['COOLDOWN', 'NO_DIRECTION', 'DEAD'].includes(value.reason)) return value as AbilityRejected;
+      (value.ability === 'dash' || value.ability === 'shield') && typeof value.reason === 'string' && ['COOLDOWN', 'NO_DIRECTION', 'DEAD', 'MATCH_ENDED'].includes(value.reason)) return value as AbilityRejected;
   if (value.type === 'error' && typeof value.code === 'string' && typeof value.message === 'string') return value as ProtocolError;
   if (value.type !== 'snapshot' || !identifier(value.epoch) || !Number.isSafeInteger(value.tick) || (value.tick as number) < 0 ||
       !Array.isArray(value.players) || value.players.length > MAX_PLAYERS) return null;
@@ -105,6 +118,7 @@ function nonnegativeInteger(value: unknown): value is number { return Number.isS
 function validGameplay(value: unknown): value is GameplaySnapshot {
   if (!object(value) || !nonnegativeInteger(value.tick) || !Array.isArray(value.cores) || value.cores.length > CORE_RULES.count ||
       !Array.isArray(value.scores) || value.scores.length > MAX_PLAYERS || !Array.isArray(value.events) || value.events.length > CORE_RULES.eventLimit) return false;
+  if (value.match !== undefined && !validMatch(value.match, value.tick)) return false;
   const position = (p: unknown) => object(p) && finite(p.x) && finite(p.y) && p.x >= 0 && p.x <= 960 && p.y >= 0 && p.y <= 640;
   const coreId = (id: unknown) => typeof id === 'string' && /^core-[1-9]\d{0,14}$/.test(id);
   const multiplier = (m: unknown) => Number.isInteger(m) && (m as number) >= 1 && (m as number) <= CORE_RULES.maxMultiplier;
@@ -176,4 +190,26 @@ function validGameplay(value: unknown): value is GameplaySnapshot {
     }
   } else if (value.hazards !== undefined || value.healthEvents !== undefined) return false;
   return true;
+}
+
+function validResults(value: unknown): value is MatchResults {
+  if (!object(value) || !identifier(value.matchId) || !nonnegativeInteger(value.durationTicks) || value.durationTicks < 1 ||
+      !Array.isArray(value.rankings) || value.rankings.length > MAX_PLAYERS || !Array.isArray(value.winnerIds)) return false;
+  const ids = new Set<string>(); let previousScore = Infinity; let previousRank = 0;
+  for (let i = 0; i < value.rankings.length; i++) {
+    const row = value.rankings[i];
+    if (!object(row) || !identifier(row.id) || ids.has(row.id) || !Number.isInteger(row.slot) || (row.slot as number) < 1 || (row.slot as number) > 4 ||
+        !nonnegativeInteger(row.score) || row.score > previousScore || !nonnegativeInteger(row.coresCollected) ||
+        row.rank !== (row.score === previousScore ? previousRank : i + 1)) return false;
+    ids.add(row.id); previousScore = row.score; previousRank = row.rank as number;
+  }
+  const winners = value.rankings.filter(row => (row as MatchRanking).rank === 1).map(row => (row as MatchRanking).id);
+  return value.winnerIds.length === winners.length && value.winnerIds.every((id, i) => id === winners[i]) &&
+    value.outcome === (winners.length === 0 ? 'empty' : winners.length === 1 ? 'winner' : 'tie');
+}
+function validMatch(value: unknown, tick: number): value is MatchState {
+  if (!object(value) || !identifier(value.id) || !nonnegativeInteger(value.durationTicks) || value.durationTicks < 1) return false;
+  if (value.phase === 'ACTIVE') return tick < value.durationTicks && value.endedAtTick === null && value.results === null;
+  return value.phase === 'RESULTS' && value.endedAtTick === tick && tick >= value.durationTicks && validResults(value.results) &&
+    value.results.matchId === value.id && value.results.durationTicks === tick;
 }
