@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import type { RoomSnapshot, ServerMessage, Snapshot, Welcome } from '@neon/protocol';
 import { createAuthFixture } from '../../../tests/auth-fixture.ts';
@@ -21,6 +21,7 @@ beforeAll(async()=>{
   server=createGameServer({verifyToken:createSupabaseVerifier(authUrl,'sb_publishable_test_fixture'),allowedOrigins:['http://localhost:5173'],
     rooms:createSupabaseRooms(authUrl,'sb_publishable_test_fixture','sb_secret_test_fixture')});
   server.http.listen(0,'127.0.0.1'); await once(server.http,'listening'); url=`ws://127.0.0.1:${(server.http.address() as AddressInfo).port}/ws`;
+  await vi.waitFor(async () => expect((await fetch(url.replace('ws:', 'http:').replace('/ws', '/ready'))).status).toBe(200), { timeout: 3000 });
 });
 afterAll(async()=>{ sockets.forEach(s=>s.terminate()); await server.close(); await new Promise<void>(resolve=>fixture.http.close(()=>resolve())); await data.db.close(); });
 async function rpcRoom(user:string,name:string,args:Record<string,unknown>) {

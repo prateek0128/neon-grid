@@ -1,6 +1,6 @@
 # NEON GRID: CYBER HEIST
 
-Phase 3B: secure private rooms, lobby, authoritative multiplayer movement, core collection, combo scoring, Dash and Shield. Later heist mechanics remain out of scope.
+Phase 4: production configuration and operational hardening for the existing multiplayer match loop. Public deployment and live production verification remain pending; see `docs/phase4-report.md` and `docs/deployment.md`.
 
 React/TypeScript/Vite renders the interface and Canvas 2D arena. Supabase Auth supplies anonymous identity; Postgres RPCs control durable room state. A separate persistent TypeScript WebSocket server independently activates matches and owns all movement, cores, scores and abilities. No sibling game's repository, backend or credentials are used.
 
@@ -36,7 +36,7 @@ Edit the ignored environment files; placeholders cannot connect to a project.
 pnpm dev
 ```
 
-Open `http://127.0.0.1:5173`. Server health: `http://127.0.0.1:8787/health`. Separate commands are `pnpm --filter @neon/web dev` and `pnpm --filter @neon/server dev`.
+Open `http://127.0.0.1:5173`. Server liveness: `http://127.0.0.1:8787/health`; readiness: `http://127.0.0.1:8787/ready`. Readiness must return 200 before game connections are admitted. Separate commands are `pnpm --filter @neon/web dev` and `pnpm --filter @neon/server dev`.
 
 ## Two-client live verification
 
@@ -60,12 +60,12 @@ For another device on the same LAN, explicitly bind Vite (`pnpm --filter @neon/w
 pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm test
-pnpm build
+pnpm build:local
 pnpm exec playwright install chromium
 pnpm test:browser
 ```
 
-The browser build is `apps/web/dist/`; the bundled server entry is `apps/server/dist/index.js`. `pnpm start` starts that server with its ignored `.env`. Frontend preview is `pnpm --filter @neon/web preview`; its origin also needs explicit server authorization.
+Use `pnpm build` with actual production public environment settings for deployment. It rejects loopback game URLs and insecure remote WebSockets. `pnpm build:local` permits explicitly local builds for validation. The browser build is `apps/web/dist/`; the bundled server entry is `apps/server/dist/index.js`. `pnpm start` starts that server with its ignored `.env`. Frontend preview is `pnpm --filter @neon/web preview`; its origin also needs explicit server authorization.
 
 The database suite executes the migration, SQL functions, RLS and role grants using embedded PostgreSQL (PGlite). Auth/API fixtures are test-only. Browser tests run two isolated Chromium contexts against the built production server and Vite frontend, with those SQL-backed fixtures. These results are **not live Supabase verification**. PGlite serializes execution; its competing-final-slot test does not prove multi-connection production lock behavior. Ports 5173, 9100 and 9101 must be free. If your development browser is running, use `NEON_TEST_WEB_PORT=5174 pnpm test:browser`; fixture services remain on 9100/9101. Screenshots/traces go to ignored `test-results/`.
 

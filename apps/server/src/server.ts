@@ -7,13 +7,16 @@ import type { ErrorCode, PlayerState, ServerMessage, Snapshot, Vector } from '@n
 import { activateAbility, advanceAbilityPosition, advanceGameplay, advancePosition, cancelDash, createGameplay, gameplaySnapshot, playerAlive, reconcileGameplay, spawnPosition } from '@neon/simulation';
 import type { GameplayPlayer, GameplayState } from '@neon/simulation';
 import type { VerifyToken } from './auth.ts';
+import { validateOrigins } from './config.ts';
 import type { RoomStore } from './rooms.ts';
 
 type Player = PlayerState & { userId: string; movement: Vector; lastInputAt: number; lastDirection: Vector | null; lastDirectionAt: number; disconnectedAt: number | null; socket: WebSocket | null };
 type ArenaState = { id: string; roomId: string | null; players: Map<string, Player>; eligible: Map<string, { id: string; slot: number }>; gameplay?: GameplayState; lifecycleBusy?: boolean };
 type Connection = { player: Player | null; arena: ArenaState | null; sessionId: string; expiresAt: number; authenticating: boolean; accessToken: string | null; lifecycleBusy: boolean; tokens: number; rateAt: number; alive: boolean; authTimer: ReturnType<typeof setTimeout> };
 
-export function createGameServer(options: { verifyToken: VerifyToken; allowedOrigins: string[]; rooms?: RoomStore; allowTestArena?: boolean; matchDurationTicks?: number }) {
+export function createGameServer(options: { verifyToken: VerifyToken; allowedOrigins: string[]; rooms?: RoomStore; allowTestArena?: boolean; matchDurationTicks?: number; shutdownGraceMs?: number }) {
+  validateOrigins(options.allowedOrigins);
+  if (options.shutdownGraceMs !== undefined && (!Number.isSafeInteger(options.shutdownGraceMs) || options.shutdownGraceMs < 0 || options.shutdownGraceMs > 5000)) throw new Error('Invalid shutdown grace.');
   if (options.matchDurationTicks !== undefined && (!Number.isSafeInteger(options.matchDurationTicks) || options.matchDurationTicks < 1)) throw new Error('Invalid match duration.');
   const connections = new Map<WebSocket, Connection>();
   const epoch = randomUUID();
@@ -26,18 +29,28 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
   let syncInFlight = false;
   let tick = 0;
   let closing = false;
+  const isReady = () => !closing && http.listening && (options.rooms ? roomsHealthy && performance.now() - lastRoomSync <= 5000 : !!options.allowTestArena);
   const http = createServer((request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('Content-Type', 'application/json');
-    response.writeHead(request.url === '/health' && !closing ? 200 : 404);
-    response.end(JSON.stringify(request.url === '/health' ? { status: closing ? 'closing' : 'ok', protocol: PROTOCOL_VERSION } : { error: 'Not found' }));
+    response.setHeader('X-Content-Type-Options', 'nosniff');
+    const health = request.url === '/health'; const ready = request.url === '/ready';
+    let status = 404; let body: Record<string, string | number> = { error: 'Not found' };
+    if (health || ready) {
+      if (request.method !== 'GET' && request.method !== 'HEAD') { status = 405; body = { error: 'Method not allowed' }; response.setHeader('Allow', 'GET, HEAD'); }
+      else if (health) { status = closing ? 503 : 200; body = { status: closing ? 'closing' : 'ok', protocol: PROTOCOL_VERSION }; }
+      else { status = isReady() ? 200 : 503; body = { status: status === 200 ? 'ready' : 'not_ready', protocol: PROTOCOL_VERSION }; }
+    }
+    response.writeHead(status); response.end(request.method === 'HEAD' ? undefined : JSON.stringify(body));
   });
+  http.headersTimeout = 10000; http.requestTimeout = 10000; http.keepAliveTimeout = 5000; http.maxHeadersCount = 32;
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES, perMessageDeflate: false });
   http.on('upgrade', (request, socket, head) => {
     if (closing || request.url !== '/ws' || !options.allowedOrigins.includes(request.headers.origin ?? '') || connections.size >= 32) {
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;
     }
+    if (!isReady()) { socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n'); return; }
     wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, request));
   });
   function send(ws: WebSocket, message: ServerMessage) {
@@ -62,6 +75,7 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
     });
   }
   function broadcast() {
+    if (closing) return;
     const snapshots = new Map<string, Snapshot>();
     for (const [ws, connection] of connections) if (connection.player && connection.arena) {
       if (!snapshots.has(connection.arena.id)) snapshots.set(connection.arena.id, snapshot(connection.arena));
@@ -319,21 +333,31 @@ export function createGameServer(options: { verifyToken: VerifyToken; allowedOri
       ws.ping();
     }
   }, 10000);
-  return {
-    http,
-    async close() {
-      closing = true;
-      clearInterval(simulationTimer);
-      clearInterval(heartbeatTimer);
-      clearInterval(roomTimer);
-      for (const [ws, connection] of connections) {
-        clearTimeout(connection.authTimer);
-        send(ws, { type: 'error', version: PROTOCOL_VERSION, code: 'SERVER_CLOSING', message: 'Server restarting.' });
-        ws.terminate();
-      }
-      arenas.clear();
-      await new Promise<void>(resolve => wss.close(() => resolve()));
-      await new Promise<void>(resolve => http.close(() => resolve()));
-    },
-  };
+  let shutdown: Promise<void> | null = null;
+  function close(): Promise<void> {
+    if (shutdown) return shutdown;
+    closing = true;
+    clearInterval(simulationTimer); clearInterval(heartbeatTimer); clearInterval(roomTimer);
+    for (const [ws, connection] of connections) {
+      clearTimeout(connection.authTimer);
+      connection.accessToken = null;
+      if (connection.player) connection.player.movement = { x: 0, y: 0 };
+      send(ws, { type: 'error', version: PROTOCOL_VERSION, code: 'SERVER_CLOSING', message: 'Server restarting.' });
+      ws.close(1012, 'Server restarting');
+    }
+    shutdown = (async () => {
+      const deadline = setTimeout(() => {
+        for (const ws of connections.keys()) ws.terminate();
+        http.closeAllConnections();
+      }, options.shutdownGraceMs ?? 2000);
+      try {
+        const socketsClosed = new Promise<void>(resolve => wss.close(() => resolve()));
+        const httpClosed = new Promise<void>(resolve => http.close(() => resolve()));
+        http.closeIdleConnections();
+        await Promise.all([socketsClosed, httpClosed]);
+      } finally { clearTimeout(deadline); connections.clear(); arenas.clear(); }
+    })();
+    return shutdown;
+  }
+  return { http, close };
 }

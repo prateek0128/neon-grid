@@ -17,4 +17,6 @@ Use a single **Render Web Service** for the Node/TypeScript game server and sepa
 
 For later hosting: bind HOST to `0.0.0.0`, accept the provider's PORT, configure exact ALLOWED_ORIGINS, and build the frontend with the server's secure WebSocket URL. Use a persistent instance appropriate to uninterrupted play and keep one replica until room routing/leases exist. Provider restarts still interrupt connections and reset this phase's in-memory arena; reconnect handling is included.
 
-Anonymous Supabase Auth is silent, so it does not require a visible player account flow. Room codes and touch controls are later-phase requirements and are not claimed complete here.
+Anonymous Supabase Auth is silent, so it does not require a visible player account flow. Room codes are now implemented; touch movement remains pending.
+
+Phase 4 adds repository-root `vercel.json` and `render.yaml` templates for a Vercel static client and one persistent Render server. No service has been provisioned or deployment verified. See [deployment runbook](deployment.md) for prerequisites, singleton lease handoff, readiness checks and the production acceptance gate.

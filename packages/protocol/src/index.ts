@@ -213,3 +213,5 @@ function validMatch(value: unknown, tick: number): value is MatchState {
   return value.phase === 'RESULTS' && value.endedAtTick === tick && tick >= value.durationTicks && validResults(value.results) &&
     value.results.matchId === value.id && value.results.durationTicks === tick;
 }
+
+export * from './configuration.ts';

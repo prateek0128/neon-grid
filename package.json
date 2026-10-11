@@ -11,9 +11,10 @@
     "dev": "pnpm --parallel --filter @neon/web --filter @neon/server dev",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "test:browser": "pnpm build && playwright test",
+    "test:browser": "pnpm build:local && playwright test",
     "build": "pnpm --filter @neon/web build && pnpm --filter @neon/server build",
-    "start": "pnpm --filter @neon/server start"
+    "start": "pnpm --filter @neon/server start",
+    "build:local": "node scripts/build-local.mjs"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.5.3",

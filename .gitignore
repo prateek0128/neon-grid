@@ -10,3 +10,6 @@ test-results/
 *.log
 supabase/.temp/
 supabase/.branches/
+.vercel/
+*.pem
+*.key

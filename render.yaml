@@ -1,0 +1,32 @@
+# Template only: no service is provisioned by committing this file.
+# Root is the repository root. Keep one replica; never enable autoscaling.
+services:
+  - type: web
+    name: neon-grid-game-server
+    runtime: node
+    plan: starter
+    numInstances: 1
+    autoDeployTrigger: 'off'
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @neon/server build
+    startCommand: pnpm --filter @neon/server start
+    # Liveness deliberately permits replacement-instance lease handoff; see deployment.md.
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 24.19.0
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: ENABLE_MOVEMENT_TEST_ARENA
+        value: 'false'
+      - key: MATCH_DURATION_SECONDS
+        value: '90'
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
+        sync: false
+      - key: SUPABASE_SERVER_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
