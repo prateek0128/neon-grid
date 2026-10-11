@@ -6,6 +6,8 @@ These configurations are templates. They do not provision or deploy services. Us
 
 Serve the Vite client on Vercel over HTTPS and the authoritative Node server on one persistent Render Web Service. Supabase handles anonymous Auth and durable room membership; gameplay and results remain in server memory. The browser discovers the server from `VITE_GAME_SERVER_URL`, embedded at build time. Changing that value requires a frontend rebuild.
 
+This separate deployment architecture is confirmed. Vercel serves only `apps/web`; do not add Services, bindings, serverless game-server adapters or `/api`/`/ws` proxy rewrites. The browser connects directly to Render's public WSS endpoint. The root `vercel.json` already builds only the frontend and retains the public security headers.
+
 Before deployment, obtain access to the dedicated Supabase project, the hosting accounts, and the repository. Confirm anonymous sign-in is enabled and the existing secure-room migration is applied. Do not reset the database or reapply migrations as part of deployment. Keep `ng_private` outside API-exposed schemas. Verify any additional authenticated Handshake mission restrictions; the public mission evidence in `hosting.md` does not establish those restricted requirements.
 
 Use Node 24.18+ below 25 and pnpm 11.19.0, pinned by `packageManager`. The Render template pins Node 24.19.0. Select the Node 24 runtime on Vercel and enable `ENABLE_EXPERIMENTAL_COREPACK=1`; its install command invokes Corepack to honor the pinned package manager. Verify provider build logs show compatible Node and pnpm versions. Neither provider build has been executed in this phase.
@@ -29,10 +31,14 @@ Use the canonical production browser origin. Preview deployment origins are reje
 
 ## Provider setup
 
-1. Create a Render Web Service using `render.yaml`, repository root, one paid persistent instance, and automatic deploys disabled. Review plan cost before provisioning. Enter its four unsynced environment variables in provider settings. Never enable autoscaling or multiple replicas.
-2. Record its public HTTPS server origin and corresponding `wss://…/ws` address. TLS terminates at the provider; Node listens on its supplied HTTP port.
+1. Reuse the existing persistent Render Web Service. `render.yaml` documents the single-instance settings; do not provision a duplicate server. Never enable autoscaling or multiple replicas.
+2. Obtain its actual public HTTPS origin from the Render service dashboard. Convert `https://` to `wss://` and append `/ws`; do not infer a hostname from the service name. TLS terminates at the provider; Node listens on its supplied HTTP port.
 3. Create a Vercel static project with repository root as its Root Directory and the root `vercel.json`. Configure the three public browser variables and Corepack setting. Its build command builds only `@neon/web`, producing `apps/web/dist`. Set the exact resulting browser origin on Render and restart the service in a controlled window.
 4. Check `/health` and `/ready`, then perform the full checklist below. Do not treat a successful provider deployment as multiplayer acceptance.
+
+In Vercel Project Settings → Environment Variables, set `VITE_GAME_SERVER_URL` for Production to that exact Render WSS URL. Do not use an internal service binding or the Vercel frontend domain for this variable. Preserve the existing `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`; keep `SUPABASE_SERVER_KEY` exclusively on Render. Set the same public game URL for Preview only if its exact browser origins are deliberately authorized on Render. Configuration changes take effect on the next frontend build; do not deploy until the configuration and validation report have been reviewed.
+
+Local `apps/web/.env` remains configured for local development. To check the production frontend locally without editing it, supply the actual `VITE_GAME_SERVER_URL` in the command environment and run `pnpm --filter @neon/web build`. If a persistent local production override is desired, put only that public variable in ignored `apps/web/.env.production.local`; do not duplicate Supabase credentials. Such a file is for local validation and is not uploaded to Vercel or committed.
 
 Render's deployment health path is intentionally `/health`. A replacement process cannot acquire the singleton database lease while the previous process owns it. Waiting for `/ready` before terminating the old process could prevent deployment handoff. This choice allows a short period of WebSocket 503 responses while the old lease expires. Use `/ready` as the post-deployment acceptance check, and schedule restarts outside active matches. This is not uninterrupted deployment.
 

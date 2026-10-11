@@ -3,7 +3,7 @@
   "framework": null,
   "installCommand": "corepack pnpm install --frozen-lockfile",
   "buildCommand": "corepack pnpm --filter @neon/web build",
-  "outputDirectory": "apps/web/dist",
+  "outputDirectory": "dist",
   "headers": [
     { "source": "/(.*)", "headers": [
       { "key": "X-Content-Type-Options", "value": "nosniff" },
