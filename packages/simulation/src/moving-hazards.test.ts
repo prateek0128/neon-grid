@@ -71,10 +71,31 @@ it('serializes and validates moving positions and rejects forged motion/outcomes
   const { state, player } = setup(960); state.tick = 959; advanceGameplay(state, [player]);
   const snapshot = { type: 'snapshot', version: 1, epoch: state.match.id, tick: state.tick, players: [], gameplay: gameplaySnapshot(state) };
   expect(parseServerMessage(JSON.stringify(snapshot))).not.toBeNull();
-  for (const field of ['coordinate', 'previousCoordinate', 'stage']) {
+  for (const field of ['coordinate', 'previousCoordinate', 'stage', 'pattern']) {
     const copy = structuredClone(snapshot); (copy.gameplay.hazards![0] as unknown as Record<string, unknown>)[field] = 9999;
     expect(parseServerMessage(JSON.stringify(copy))).toBeNull();
   }
-  for (const field of ['motion', 'hazards', 'damage', 'difficultyStage']) expect(parseClientMessage(JSON.stringify({ type: 'input', version: 1, sessionId: id, sequence: 1, movement: { x: 0, y: 0 }, [field]: true }))).toBeNull();
+  const mismatched = structuredClone(snapshot); mismatched.gameplay.hazards![0]!.pattern = 'vertical-right';
+  expect(parseServerMessage(JSON.stringify(mismatched))).toBeNull();
+  const legacy = structuredClone(snapshot); delete legacy.gameplay.hazards![0]!.pattern;
+  expect(parseServerMessage(JSON.stringify(legacy))).not.toBeNull();
+  for (const field of ['motion', 'hazards', 'damage', 'difficultyStage', 'pattern']) expect(parseClientMessage(JSON.stringify({ type: 'input', version: 1, sessionId: id, sequence: 1, movement: { x: 0, y: 0 }, [field]: true }))).toBeNull();
   expect(DIFFICULTY_RULES.stage3IntervalTicks).toBeGreaterThanOrEqual(HAZARD_RULES.warningTicks + DIFFICULTY_RULES.movingActiveTicks);
+});
+
+it.each([
+  [945, 'horizontal-up'], [1065, 'vertical-left'],
+  [1185, 'horizontal-down'], [1305, 'vertical-right'],
+] as const)('issues the deterministic %s pattern and preserves collision/protection', (tick, pattern) => {
+  const { state, player, vital, laser } = setup(tick);
+  expect(laser.pattern).toBe(pattern);
+  expect(laserAtTick(tick - 1)).toMatchObject({ pattern, phase: 'warning' });
+  const outside = { ...player.position, [laser.axis]: laser.coordinate + 19.001 };
+  expect(laserCollision(laser, outside)).toBe(false);
+  expect(laserCollision(laser, { ...outside, [laser.axis]: laser.coordinate + 19 })).toBe(true);
+  state.abilities[0]!.shieldUntilTick = tick + 1;
+  advanceHazards(state, [player]); expect(vital.health).toBe(100);
+  const unprotected = setup(tick); advanceHazards(unprotected.state, [unprotected.player]);
+  expect(unprotected.vital.health).toBe(50);
+  expect(laserAtTick(laser.endsAtTick)).toMatchObject({ pattern, phase: 'idle', coordinate: laser.motion!.to });
 });

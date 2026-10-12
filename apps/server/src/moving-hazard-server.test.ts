@@ -45,6 +45,7 @@ it('sends identical moving hazards, recovers them on reconnect and preserves ext
   const first = await a.next<Snapshot>(m => m.type === 'snapshot' && m.gameplay?.hazards?.[0]?.phase === 'active' && !!m.gameplay.hazards[0].motion);
   const peer = await b.next<Snapshot>(m => m.type === 'snapshot' && m.gameplay?.tick === first.gameplay?.tick);
   expect(peer.gameplay!.hazards).toEqual(first.gameplay!.hazards); expect(peer.gameplay!.difficultyStage).toBe(2);
+  expect(first.gameplay!.hazards![0]!.pattern).toBe('horizontal-up');
   const frozenClock = first.gameplay!.tick;
   const closed = once(b.ws, 'close'); b.ws.close(); await closed;
   const restored = await connect(1);

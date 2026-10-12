@@ -30,7 +30,8 @@ export function laserAtTick(tick: number): LaserState {
   const from = direction === 1 ? DIFFICULTY_RULES.margin : bound - DIFFICULTY_RULES.margin;
   const to = from + direction * speed * DIFFICULTY_RULES.movingActiveTicks / TICK_RATE;
   const coordinateAt = (time: number) => from + direction * speed * Math.max(0, Math.min(DIFFICULTY_RULES.movingActiveTicks, time - activeAtTick)) / TICK_RATE;
-  return { id: `laser-${cycle + 1}`, axis, coordinate: coordinateAt(tick), previousCoordinate: coordinateAt(Math.max(activeAtTick, tick - 1)),
+  const pattern = axis === 'x' ? (direction === 1 ? 'vertical-right' : 'vertical-left') : (direction === 1 ? 'horizontal-down' : 'horizontal-up');
+  return { id: `laser-${cycle + 1}`, pattern, axis, coordinate: coordinateAt(tick), previousCoordinate: coordinateAt(Math.max(activeAtTick, tick - 1)),
     motion: { from, to, speed, direction }, stage, warningAtTick, activeAtTick, endsAtTick, phase };
 }
 

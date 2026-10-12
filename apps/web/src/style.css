@@ -97,3 +97,8 @@ input:focus { outline: 2px solid #56f0d0; outline-offset: 2px; }
 .match-results .results-self { background: #19343b; color: #56f0d0; }
 
 .extraction-status { color: #86ffe0; border-left: 3px solid #29e6c4; padding: .65rem; background: #29e6c410; overflow-wrap: anywhere; }
+
+.hazard-status.warning { border-left: 4px dashed #ffc875; background: #ffc87512; padding: .55rem .7rem; }
+.hazard-status.active { border-left: 4px solid #ff5274; background: #ff527418; padding: .55rem .7rem; font-weight: 700; }
+.hazard-status.complete { color: #86ffe0; border-left: 4px solid #86ffe0; padding: .55rem .7rem; }
+.hazard-legend { color: #bfccde; font-size: .8rem; line-height: 1.5; overflow-wrap: anywhere; }

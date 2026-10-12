@@ -24,6 +24,9 @@ test('moving sweeps render, share positions across two clients and recover after
     await expect(a.getByTestId('hazard-status')).toHaveAttribute('data-moving', 'true', { timeout: 35000 });
     await expect(a.getByTestId('hazard-status')).toHaveAttribute('data-phase', 'warning');
     await expect(a.getByTestId('difficulty-stage')).toContainText('stage 2/3');
+    await expect(a.getByTestId('hazard-status')).toHaveAttribute('data-pattern', 'horizontal-up');
+    await expect(a.getByTestId('hazard-status')).toContainText('↑ Up');
+    await expect(a.getByTestId('hazard-status')).toHaveAttribute('data-presentation', 'warning');
     await expect(a.getByTestId('hazard-status')).toHaveAttribute('data-phase', 'active');
     const coordinate = await a.getByTestId('hazard-status').getAttribute('data-coordinate');
     await expect.poll(() => a.getByTestId('hazard-status').getAttribute('data-coordinate')).not.toBe(coordinate);
@@ -32,7 +35,15 @@ test('moving sweeps render, share positions across two clients and recover after
     await expect(b.getByTestId('hazard-status')).toHaveAttribute('data-moving', 'true');
     await expect(b.getByTestId('hazard-status')).toHaveAttribute('data-stage', '2');
     await expect(b.getByTestId('hazard-status')).toHaveAttribute('data-phase', 'active', { timeout: 6000 });
-    await a.screenshot({ path: 'test-results/phase5b-sweep.png', fullPage: true });
+    await a.screenshot({ path: 'test-results/phase5c-active.png', fullPage: true });
+    await expect(a.getByTestId('hazard-status')).toHaveAttribute('data-presentation', 'complete', { timeout: 6000 });
+    await expect(a.getByTestId('hazard-status')).toContainText('beam off');
+    await b.setViewportSize({ width: 375, height: 812 });
+    await expect(b.locator('.hazard-legend')).toBeVisible();
+    expect(await b.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(b.getByTestId('hazard-status')).toHaveAttribute('data-pattern', 'vertical-left', { timeout: 6000 });
+    await expect(b.getByTestId('hazard-status')).toContainText('← Left');
+    await b.screenshot({ path: 'test-results/phase5c-narrow-warning.png', fullPage: true });
     await a.getByRole('button', { name: 'Return to Lobby' }).click(); await expect(b.getByTestId('room-status')).toHaveText('LOBBY');
   } finally { await ca.close(); await cb.close(); }
 });
