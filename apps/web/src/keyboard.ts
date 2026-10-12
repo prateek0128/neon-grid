@@ -11,7 +11,17 @@ export function attachKeyboard(onChange: (movement: Vector) => void, onAbility?:
   const keys = new Set<string>();
   const abilitiesHeld = new Set<string>();
   const change = (event: KeyboardEvent, down: boolean) => {
-    if (event.target instanceof HTMLElement && event.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+    const element = event.target instanceof HTMLElement ? event.target : null;
+    const editable = !!element?.closest('input, textarea, select, [contenteditable="true"]');
+    const nativeSpace = event.code === 'Space' && !!element?.closest('button, [role="button"], a[href]');
+    // Always release game keys, even if focus moved into another control.
+    if (!down) {
+      abilitiesHeld.delete(event.code);
+      if (keys.delete(event.code)) onChange(movementFromKeys(keys));
+      if (!editable && !nativeSpace && (movementCodes.has(event.code) || (onAbility && ['Space', 'KeyE'].includes(event.code)))) event.preventDefault();
+      return;
+    }
+    if (editable || nativeSpace) return;
     if (onAbility && (event.code === 'Space' || event.code === 'KeyE')) {
       event.preventDefault();
       if (down) {

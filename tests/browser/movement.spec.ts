@@ -1,5 +1,5 @@
-import { expect, test } from '@playwright/test';
-import type { Page } from '@playwright/test';
+import { expect, test } from './http-test';
+import type { Page } from './http-test';
 
 async function position(page: Page, id: string) {
   const player = page.locator(`[data-player-id="${id}"]`);
@@ -69,19 +69,9 @@ test('two isolated browser sessions share movement, key release, and stable reco
   } finally { await contextA.close(); await contextB.close(); }
 });
 
-test('blur clears held keys and reconnect backoff recovers from a real socket interruption', async ({ browser }) => {
+test('blur clears held keys and HTTP polling recovers from a network interruption', async ({ browser }) => {
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.addInitScript(() => {
-    const NativeWebSocket = window.WebSocket;
-    // Instrument the native socket only in this test, without adding an app debug endpoint.
-    window.WebSocket = class extends NativeWebSocket {
-      constructor(url: string | URL, protocols?: string | string[]) {
-        super(url, protocols);
-        (window as unknown as { testSocket: WebSocket }).testSocket = this;
-      }
-    };
-  });
   try {
     const id = await connect(page);
     const start = await position(page, id);
@@ -93,8 +83,9 @@ test('blur clears held keys and reconnect backoff recovers from a real socket in
     await page.waitForTimeout(200);
     expect(await position(page, id)).toEqual(stopped);
     await page.keyboard.up('ArrowRight');
-    await page.evaluate(() => (window as unknown as { testSocket: WebSocket }).testSocket.close(4000, 'Test interruption'));
+    await context.setOffline(true);
     await expect(page.getByTestId('connection-status')).toHaveText('reconnecting');
+    await context.setOffline(false);
     await expect(page.getByTestId('connection-status')).toHaveText('connected', { timeout: 10000 });
     await expect(page.locator('[data-self="true"]')).toHaveAttribute('data-player-id', id);
   } finally { await context.close(); }

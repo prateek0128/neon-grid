@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './http-test';
 test.use({ trace: 'off' });
 test('two clients share extraction, reload recovery, lockdown, replay and lobby reset', async ({ browser }) => {
   test.setTimeout(90000);

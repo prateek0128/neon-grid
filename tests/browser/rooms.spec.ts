@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './http-test';
 
 test('two isolated browser sessions create, join, ready, start, move, reconnect and return to lobby using SQL RPCs', async ({ browser }) => {
   const ca = await browser.newContext({ permissions:['clipboard-read','clipboard-write'] }); const cb = await browser.newContext();

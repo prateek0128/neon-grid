@@ -2,12 +2,13 @@ import { useEffect, useRef } from 'react';
 import type { Snapshot, Vector } from '@neon/protocol';
 import { ARENA, CORE_RULES } from '@neon/simulation';
 import { TICK_RATE } from '@neon/protocol';
+import { loadCosmetics, type Cosmetics } from './cosmetics';
 
 export const PLAYER_COLORS = ['#56f0d0', '#c9a7ff', '#ffc875', '#80bdff'];
-export function Arena({ snapshot, playerId }: { snapshot: Snapshot | null; playerId: string | null }) {
+export function Arena({ snapshot, playerId, cosmetics }: { snapshot: Snapshot | null; playerId: string | null; cosmetics?: Cosmetics }) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const latest = useRef({ snapshot, playerId });
-  useEffect(() => { latest.current = { snapshot, playerId }; }, [snapshot, playerId]);
+  const latest = useRef({ snapshot, playerId, cosmetics });
+  useEffect(() => { latest.current = { snapshot, playerId, cosmetics }; }, [snapshot, playerId, cosmetics]);
   useEffect(() => {
     const context = canvas.current?.getContext('2d');
     if (!context) return;
@@ -30,6 +31,7 @@ export function Arena({ snapshot, playerId }: { snapshot: Snapshot | null; playe
       context!.stroke();
       context!.strokeStyle = '#395266';
       context!.strokeRect(1, 1, ARENA.width - 2, ARENA.height - 2);
+      for (const obstacle of current.snapshot?.gameplay?.arena?.obstacles ?? []) { context!.fillStyle = '#26324b'; context!.strokeStyle = '#8e79cf'; context!.lineWidth = 2; context!.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height); context!.strokeRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height); }
       const extraction = current.snapshot?.gameplay?.extraction;
       if (extraction) {
         context!.fillStyle = extraction.phase === 'open' ? '#29e6c433' : '#9274ff18';
@@ -41,6 +43,7 @@ export function Arena({ snapshot, playerId }: { snapshot: Snapshot | null; playe
         context!.fillText(extraction.phase === 'open' ? 'EXTRACT' : 'EXIT', extraction.zone.x, extraction.zone.y + 5);
       }
       const gameplay = current.snapshot?.gameplay;
+      for (const powerup of gameplay?.powerups ?? []) if (powerup.active) { const color = powerup.kind === 'speed' ? '#80bdff' : powerup.kind === 'bonus' ? '#ffe786' : '#56f0d0'; context!.fillStyle = color; context!.beginPath(); context!.arc(powerup.position.x, powerup.position.y, 12, 0, Math.PI * 2); context!.fill(); context!.fillStyle = '#07101d'; context!.font = 'bold 12px system-ui'; context!.textAlign = 'center'; context!.fillText(powerup.kind === 'speed' ? '»' : powerup.kind === 'bonus' ? '+' : '↻', powerup.position.x, powerup.position.y + 4); }
       for (const laser of gameplay?.hazards ?? []) {
         if (laser.phase === 'idle') continue;
         const vertical = laser.axis === 'x';
@@ -110,8 +113,9 @@ export function Arena({ snapshot, playerId }: { snapshot: Snapshot | null; playe
           context!.beginPath(); context!.arc(position.x, position.y, ARENA.radius + 15, 0, Math.PI * 2); context!.stroke(); context!.setLineDash([]);
         }
         const dashEvent = gameplay?.abilityEvents?.findLast(e => e.playerId === player.id && e.ability === 'dash');
+        const selfCosmetics = current.cosmetics ?? loadCosmetics();
         if (ability && gameplay && (gameplay.tick < ability.dashUntilTick || (dashEvent && gameplay.tick - dashEvent.tick < TICK_RATE * 0.35))) {
-          context!.strokeStyle = PLAYER_COLORS[player.slot - 1]!; context!.lineWidth = 8; context!.globalAlpha = 0.5;
+          context!.strokeStyle = player.id === current.playerId ? selfCosmetics.color : PLAYER_COLORS[player.slot - 1]!; context!.lineWidth = selfCosmetics.trail === 'dots' ? 4 : 8; context!.globalAlpha = selfCosmetics.trail === 'spark' ? 0.75 : 0.5;
           context!.beginPath(); context!.moveTo(position.x, position.y);
           context!.lineTo(position.x - ability.dashDirection.x * 45, position.y - ability.dashDirection.y * 45); context!.stroke();
           context!.globalAlpha = 1;
@@ -121,7 +125,7 @@ export function Arena({ snapshot, playerId }: { snapshot: Snapshot | null; playe
           context!.beginPath(); context!.arc(position.x, position.y, ARENA.radius + 11, 0, Math.PI * 2); context!.stroke();
         }
         context!.globalAlpha = vital?.life === 'respawning' ? 0.2 : player.connected ? 1 : 0.35;
-        context!.fillStyle = PLAYER_COLORS[player.slot - 1]!;
+        context!.fillStyle = player.id === current.playerId ? selfCosmetics.color : PLAYER_COLORS[player.slot - 1]!;
         context!.beginPath();
         context!.arc(position.x, position.y, ARENA.radius, 0, Math.PI * 2);
         context!.fill();
@@ -139,5 +143,5 @@ export function Arena({ snapshot, playerId }: { snapshot: Snapshot | null; playe
     frame = requestAnimationFrame(render);
     return () => cancelAnimationFrame(frame);
   }, []);
-  return <canvas ref={canvas} width={ARENA.width} height={ARENA.height} aria-label="Shared grid arena. Your player has a white ring. Use WASD or arrow keys. Move onto gold energy cores to collect them." />;
+  return <canvas ref={canvas} tabIndex={0} width={ARENA.width} height={ARENA.height} aria-label="Shared grid arena. Your player has a white ring. Use WASD or arrow keys. Move onto gold energy cores to collect them." />;
 }

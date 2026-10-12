@@ -11,8 +11,10 @@
   "dependencies": {
     "@neon/protocol": "workspace:*",
     "@neon/simulation": "workspace:*",
-    "@supabase/supabase-js": "2.117.3",
-    "ws": "8.22.0"
+    "@supabase/supabase-js": "2.117.3"
   },
-  "devDependencies": { "esbuild": "0.25.12" }
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "ws": "8.22.0"
+  }
 }

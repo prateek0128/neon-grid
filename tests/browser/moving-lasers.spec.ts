@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './http-test';
 import type { Snapshot } from '../../packages/protocol/src/index.ts';
 test.use({ trace: 'off' });
 test('moving sweeps render, share positions across two clients and recover after reload', async ({ browser }) => {
@@ -6,13 +6,14 @@ test('moving sweeps render, share positions across two clients and recover after
   test.setTimeout(60000);
   const ca = await browser.newContext(); const cb = await browser.newContext(); const a = await ca.newPage(); const b = await cb.newPage();
   const first = new Map<number, Snapshot>(); const second = new Map<number, Snapshot>();
-  for (const [page, snapshots] of [[a, first], [b, second]] as const) page.on('websocket', socket => socket.on('framereceived', frame => {
-    const message = JSON.parse(String(frame.payload));
-    if (message.type === 'snapshot' && message.gameplay) {
+  for (const [page, snapshots] of [[a, first], [b, second]] as const) page.on('response', async response => {
+    if (!response.url().includes('/game/') || !response.ok()) return;
+    const data = await response.json().catch(() => ({ messages: [] }));
+    for (const message of data.messages ?? []) if (message.type === 'snapshot' && message.gameplay) {
       snapshots.set(message.gameplay.tick, message);
       if (snapshots.size > 240) snapshots.delete(snapshots.keys().next().value!);
     }
-  }));
+  });
   try {
     await a.goto('/'); await b.goto('/');
     await a.getByLabel('Your callsign').fill('Cipher'); await a.getByRole('button', { name: 'Create Room', exact: true }).click();

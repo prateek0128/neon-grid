@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './http-test';
 
 // Match the gameplay regression's workaround for local two-context trace transport.
 test.use({ trace: 'off' });
@@ -8,10 +8,11 @@ test('two sessions synchronize Dash/Shield, keep cooldowns through reload and cl
   const ca = await browser.newContext(); const cb = await browser.newContext();
   const a = await ca.newPage(); const b = await cb.newPage();
   let shieldRequests = 0;
-  a.on('websocket', socket => socket.on('framesent', frame => {
-    const message = JSON.parse(String(frame.payload));
-    if (message.type === 'ability' && message.ability === 'shield') shieldRequests++;
-  }));
+  a.on('request', request => {
+    if (!request.url().endsWith('/game/step')) return;
+    const actions = request.postDataJSON()?.actions ?? [];
+    shieldRequests += actions.filter((m: { type: string; ability?: string }) => m.type === 'ability' && m.ability === 'shield').length;
+  });
   try {
     await a.goto('/'); await b.goto('/');
     await expect(a.getByTestId('ability-hud')).toHaveCount(0);

@@ -102,3 +102,11 @@ input:focus { outline: 2px solid #56f0d0; outline-offset: 2px; }
 .hazard-status.active { border-left: 4px solid #ff5274; background: #ff527418; padding: .55rem .7rem; font-weight: 700; }
 .hazard-status.complete { color: #86ffe0; border-left: 4px solid #86ffe0; padding: .55rem .7rem; }
 .hazard-legend { color: #bfccde; font-size: .8rem; line-height: 1.5; overflow-wrap: anywhere; }
+
+button:focus-visible, canvas:focus-visible { outline: 2px solid #56f0d0; outline-offset: -2px; }
+
+.clock-urgent { color: #ff9aaa; border-left: 4px solid #ff5274; padding-left: .75rem; }
+.exit-open { border: 1px solid #56f0d0; padding: .7rem; background: #56f0d014; }
+.personal-outcome { color: #86ffe0; font-weight: 700; }
+.cosmetics-picker { border: 1px solid #30425a; color: #bfccde; margin: 1rem 0; padding: .75rem; display: grid; gap: .5rem; }
+.cosmetics-picker select { margin-left: .5rem; background: #10192b; color: #eaf4ff; border: 1px solid #465d7c; }

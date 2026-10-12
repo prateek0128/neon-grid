@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './http-test';
 
 test('fresh landing sends no room RPC before anonymous sign-in', async ({ page }) => {
   let calls = 0;

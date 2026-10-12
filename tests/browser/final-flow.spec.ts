@@ -1,0 +1,40 @@
+import { expect, test } from './http-test';
+test.use({ trace: 'off' });
+test('keyboard controls, results recovery and host lifecycle stay usable on a narrow screen', async ({ browser }) => {
+  test.setTimeout(60000);
+  const ca = await browser.newContext({ viewport: { width: 375, height: 812 } }), cb = await browser.newContext();
+  const a = await ca.newPage(), b = await cb.newPage();
+  try {
+    await a.goto('/'); await b.goto('/');
+    await expect(a.getByTestId('entry-controls')).toContainText('Desktop keyboard');
+    await expect(a.getByTestId('entry-controls')).toContainText('Space to Dash');
+    await a.getByLabel('Your callsign').fill('Cipher'); await a.getByRole('button', { name: 'Create Room', exact: true }).click();
+    await b.getByLabel('Your callsign').fill('Ghost'); await b.getByLabel('Room code', { exact: true }).fill((await a.getByTestId('room-code').textContent())!);
+    await b.getByRole('button', { name: 'Join Room', exact: true }).click(); await expect(a.getByTestId('roster-member')).toHaveCount(2);
+    await a.getByRole('button', { name: 'Ready up' }).click(); await b.getByRole('button', { name: 'Ready up' }).click();
+    await expect(a.getByRole('button', { name: 'Start Match' })).toBeEnabled(); await a.getByRole('button', { name: 'Start Match' }).click();
+    await expect(a.getByTestId('connection-status')).toHaveText('connected'); await expect(b.getByTestId('connection-status')).toHaveText('connected');
+    const shield = a.getByRole('button', { name: /^Shield/ });
+    await shield.focus(); await a.keyboard.press('Space');
+    await expect(a.getByTestId('ability-hud')).toHaveAttribute('data-shield-active', 'true');
+    const arena = a.locator('canvas'); await arena.focus(); await expect(arena).toBeFocused();
+    await a.keyboard.down('KeyD'); await a.keyboard.press('Space');
+    await expect(a.getByRole('button', { name: /^Dash/ })).toBeDisabled(); await a.keyboard.up('KeyD');
+    expect(await a.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await expect(a.getByTestId('match-results')).toBeVisible({ timeout: 25000 });
+    const generation = await a.getByTestId('match-results').getAttribute('data-match-id');
+    await ca.setOffline(true);
+    await expect(a.getByTestId('connection-status')).toHaveText('reconnecting');
+    await expect(a.getByTestId('sync-detail')).toBeVisible(); await expect(a.getByTestId('sync-detail')).toContainText('Retrying');
+    await expect(a.getByRole('button', { name: 'Play Again' })).toBeDisabled();
+    await ca.setOffline(false); await expect(a.getByTestId('connection-status')).toHaveText('connected', { timeout: 10000 });
+    await expect(a.getByTestId('match-results')).toHaveAttribute('data-match-id', generation!);
+    await expect(a.getByTestId('sync-detail')).toContainText('Match synchronized');
+    await a.screenshot({ path: 'test-results/final-results-narrow.png', fullPage: true });
+    await a.getByRole('button', { name: 'Play Again' }).focus(); await a.keyboard.press('Space');
+    await expect(a.getByTestId('match-results')).toHaveCount(0); await expect(b.getByTestId('match-results')).toHaveCount(0);
+    await expect(a.getByTestId('connection-status')).toHaveText('connected');
+    await a.getByRole('button', { name: 'Return to Lobby' }).focus(); await a.keyboard.press('Space');
+    await expect(a.getByTestId('room-status')).toHaveText('LOBBY'); await expect(b.getByTestId('room-status')).toHaveText('LOBBY');
+  } finally { await ca.close(); await cb.close(); }
+});

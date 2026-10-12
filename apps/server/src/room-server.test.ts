@@ -8,7 +8,7 @@ import { createAuthFixture } from '../../../tests/auth-fixture.ts';
 import { createTestDatabase } from '../../../tests/database.ts';
 import { createSupabaseRooms } from './rooms.ts';
 import { createSupabaseVerifier } from './auth.ts';
-import { createGameServer } from './server.ts';
+import { createGameServer } from './legacy-websocket-server.ts';
 
 let data: Awaited<ReturnType<typeof createTestDatabase>>;
 let fixture: ReturnType<typeof createAuthFixture>;
@@ -66,4 +66,19 @@ it('synchronizes room movement, isolates matches, preserves reconnect identity a
   expect(await cb.next(m=>m.type==='error')).toMatchObject({code:'NOT_MEMBER'});
   expect(bw.playerId).not.toBe(rw.playerId);
   const remaining=await reconnected.next<Snapshot>(m=>m.type==='snapshot'&&m.players.length===1); expect(remaining.players[0]?.id).toBe(rw.playerId);
+});
+it('allows authenticated room HTTP reads while the same member receives an Origin handshake 403', async () => {
+  const { a, room } = await makeMatch();
+  const authUrl = `http://127.0.0.1:${(fixture.http.address() as AddressInfo).port}`;
+  const token = fixture.issue(a);
+  const response = await fetch(authUrl + '/rest/v1/rpc/ng_get_room', { method: 'POST',
+    headers: { apikey: 'sb_publishable_test_fixture', Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ p_room_id: room.id }) });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ ok: true, room: { id: room.id, status: 'IN_MATCH' } });
+  // Deliberately unlisted in this fixture: demonstrates that RPC success is independent of upgrade admission.
+  const ws = new WebSocket(url, { origin: 'https://neon-grid-tau.vercel.app' });
+  const [error] = await once(ws, 'error'); expect(String(error)).toContain('403');
+  const admitted = await connect(a, room);
+  expect(await admitted.next<Welcome>(message => message.type === 'welcome')).toMatchObject({ playerId: room.selfMemberId });
 });

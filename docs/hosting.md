@@ -1,3 +1,5 @@
+> Current transport: HTTP-only gameplay. Follow [the migration report](http-only-migration-report.md); WebSocket instructions below are historical and superseded. Database fencing, one-replica limits, and secret boundaries remain applicable.
+
 # Mission and hosting investigation
 
 Read-only investigation began October 9, 2026. No deployment, account connection or infrastructure change was made.

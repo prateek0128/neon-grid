@@ -23,11 +23,18 @@ export function validateBrowserEnvironment(env: PublicEnvironment, options: { pr
   validatePublicKey(key);
   const supabase = configuredUrl(url, 'VITE_SUPABASE_URL'); const server = configuredUrl(serverUrl, 'VITE_GAME_SERVER_URL');
   if (supabase.pathname !== '/' || (supabase.protocol !== 'https:' && !(supabase.protocol === 'http:' && loopbackHost(supabase.hostname) && (!options.production || options.allowLocal)))) throw new Error('VITE_SUPABASE_URL requires an HTTPS base URL; HTTP loopback is for local testing only.');
-  if (!['ws:', 'wss:'].includes(server.protocol) || server.pathname !== '/ws') throw new Error('VITE_GAME_SERVER_URL must use ws:// or wss:// with the /ws path.');
-  if (options.pageProtocol === 'https:' && server.protocol !== 'wss:') throw new Error('An HTTPS page requires a secure wss:// game server.');
+  // Transitional configuration compatibility only: never opens a socket.
+  // Existing public endpoint values can be used until the approved HTTP URL rebuild.
+  if (['ws:', 'wss:'].includes(server.protocol)) {
+    if (server.pathname !== '/ws') throw new Error('Legacy game endpoint must end in /ws.');
+    server.protocol = server.protocol === 'wss:' ? 'https:' : 'http:';
+    server.pathname = '/';
+  }
+  if (!['http:', 'https:'].includes(server.protocol) || server.pathname !== '/') throw new Error('VITE_GAME_SERVER_URL must be an HTTP(S) base URL.');
+  if (options.pageProtocol === 'https:' && server.protocol !== 'https:') throw new Error('An HTTPS page requires an HTTPS game server.');
   const localServer = loopbackHost(server.hostname);
-  if (options.production && ((server.protocol !== 'wss:' && !(options.allowLocal && localServer)) || (localServer && !options.allowLocal))) throw new Error('Production requires a public wss:// game server. Use pnpm build:local only for local validation.');
-  return { url, key, serverUrl };
+  if (options.production && ((server.protocol !== 'https:' && !(options.allowLocal && localServer)) || (localServer && !options.allowLocal))) throw new Error('Production requires a public HTTPS game server.');
+  return { url, key, serverUrl: server.href };
 }
 export function rejectBrowserSecrets(env: Record<string, string | undefined>) {
   for (const [name, value] of Object.entries(env)) if (value && name.startsWith('VITE_') && (/SECRET|SERVICE_ROLE|SERVER_KEY|PRIVATE_KEY/i.test(name) || value.startsWith('sb_secret_') || /-----BEGIN .*PRIVATE KEY-----/.test(value))) {

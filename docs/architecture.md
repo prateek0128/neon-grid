@@ -1,3 +1,5 @@
+> Current transport: HTTP-only gameplay. Follow [the migration report](http-only-migration-report.md); WebSocket instructions below are historical and superseded. Database fencing, one-replica limits, and secret boundaries remain applicable.
+
 # Phase 1 architecture
 
 ## Separation

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { connectGame } from './connection';
+import { connectGame } from './legacy-websocket-connection';
+import { createGameplay, gameplaySnapshot } from '@neon/simulation';
 vi.mock('./keyboard', () => ({ attachKeyboard: () => vi.fn() }));
 class TestSocket {
   static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
@@ -34,4 +35,24 @@ it.each(['cleanup', 'signout'])('does not open a socket when %s occurs during se
   if (action === 'cleanup') stop(); else authEvent('SIGNED_OUT', null);
   resolve({ data: { session: { access_token: 'fixture-only-token' } }, error: null });
   await vi.advanceTimersByTimeAsync(0); expect(TestSocket.instances).toHaveLength(0); stop(); expect(vi.getTimerCount()).toBe(0);
+});
+it('keeps an unavailable match unsynchronized, retries, then installs the initial authoritative snapshot', async () => {
+  const views = vi.fn(); const stop = connectGame(auth(), 'wss://game.example.com/ws', views);
+  try {
+    await vi.advanceTimersByTimeAsync(0);
+    TestSocket.instances[0]!.close();
+    expect(views.mock.lastCall?.[0]).toMatchObject({ status: 'reconnecting', playerId: null, snapshot: null });
+    await vi.advanceTimersByTimeAsync(800);
+    const recovered = TestSocket.instances[1]!;
+    recovered.readyState = TestSocket.OPEN; recovered.onopen?.();
+    const id = '11111111-1111-4111-8111-111111111111';
+    recovered.onmessage?.({ data: JSON.stringify({ type: 'welcome', version: 1, playerId: id, sessionId: id, epoch: id, tickRate: 30 }) });
+    expect(views.mock.lastCall?.[0]).toMatchObject({ status: 'connected', snapshot: null });
+    recovered.onmessage?.({ data: JSON.stringify({ type: 'snapshot', version: 1, epoch: id, tick: 0, players: [], gameplay: gameplaySnapshot(createGameplay(2700, id)) }) });
+    expect(views.mock.lastCall?.[0].snapshot).toMatchObject({ epoch: id, tick: 0, gameplay: { tick: 0, match: { id, durationTicks: 2700 } } });
+    expect(TestSocket.instances).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(TestSocket.instances).toHaveLength(2);
+  } finally { stop(); }
+  expect(vi.getTimerCount()).toBe(0);
 });

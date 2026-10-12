@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import type { ServerMessage, Snapshot, Welcome } from '@neon/protocol';
-import { createGameServer } from './server.ts';
+import { createGameServer } from './legacy-websocket-server.ts';
 
 const origin = 'http://localhost:5173'; const userId = randomUUID(); const memberId = randomUUID(); const roomId = randomUUID();
 let matchId: string; let active: boolean; let server: ReturnType<typeof createGameServer>; let url: string;

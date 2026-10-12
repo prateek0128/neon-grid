@@ -1,0 +1,4 @@
+import { COSMETIC_COLORS, COSMETIC_TRAILS, type Cosmetics } from './cosmetics';
+export function CosmeticsPicker({ value, onChange }: { value: Cosmetics; onChange: (value: Cosmetics) => void }) {
+  return <fieldset className="cosmetics-picker"><legend>Signal cosmetics</legend><label>Color <select aria-label="Player color" value={value.color} onChange={event => onChange({ ...value, color: event.target.value as Cosmetics['color'] })}>{COSMETIC_COLORS.map(color => <option value={color} key={color}>{color}</option>)}</select></label><label>Trail <select aria-label="Trail style" value={value.trail} onChange={event => onChange({ ...value, trail: event.target.value as Cosmetics['trail'] })}>{COSMETIC_TRAILS.map(trail => <option value={trail} key={trail}>{trail}</option>)}</select></label><p className="small">Stored only in this browser. Cosmetics never affect movement or scoring.</p></fieldset>;
+}

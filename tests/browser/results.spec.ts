@@ -1,10 +1,13 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './http-test';
 test.use({ trace: 'off' });
 test('two sessions agree on results, recover them on reload, replay once and return to lobby', async ({ browser }) => {
   test.setTimeout(90000);
   const ca = await browser.newContext(); const cb = await browser.newContext(); const a = await ca.newPage(); const b = await cb.newPage();
   let replayRequests = 0;
-  a.on('websocket', socket => socket.on('framesent', frame => { const message = JSON.parse(String(frame.payload)); if (message.type === 'lifecycle' && message.action === 'replay') replayRequests++; }));
+  a.on('request', request => {
+    if (!request.url().endsWith('/game/step')) return;
+    replayRequests += (request.postDataJSON()?.actions ?? []).filter((m: { type: string; action?: string }) => m.type === 'lifecycle' && m.action === 'replay').length;
+  });
   try {
     await a.goto('/'); await b.goto('/');
     await a.getByLabel('Your callsign').fill('Cipher'); await a.getByRole('button', { name: 'Create Room', exact: true }).click();

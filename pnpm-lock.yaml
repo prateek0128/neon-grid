@@ -47,13 +47,13 @@ importers:
       '@supabase/supabase-js':
         specifier: 2.117.3
         version: 2.117.3
-      ws:
-        specifier: 8.22.0
-        version: 8.22.0
     devDependencies:
       esbuild:
         specifier: 0.25.12
         version: 0.25.12
+      ws:
+        specifier: 8.22.0
+        version: 8.22.0
 
   apps/web:
     dependencies:

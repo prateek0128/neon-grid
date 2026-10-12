@@ -5,7 +5,7 @@ import { performance } from 'node:perf_hooks';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import type { ServerMessage, Snapshot, Welcome } from '@neon/protocol';
-import { createGameServer } from './server.ts';
+import { createGameServer } from './legacy-websocket-server.ts';
 import type { RoomAuthorization } from './rooms.ts';
 const origin = 'http://localhost:5173'; const roomId = randomUUID(); const databaseMatch = randomUUID();
 const ids = [randomUUID(), randomUUID()]; const users = [randomUUID(), randomUUID()];

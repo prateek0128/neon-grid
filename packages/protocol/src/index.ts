@@ -19,6 +19,10 @@ export const EXTRACTION_RULES = { windowTicks: 20 * TICK_RATE, zone: { x: 480, y
 export type ExtractionOutcome = 'alive' | 'extracted' | 'locked_down' | 'dead';
 export type ExtractionState = { phase: 'closed' | 'open' | 'lockdown'; opensAtTick: number; closesAtTick: number; remainingTicks: number; zone: { x: number; y: number; radius: number }; players: { id: string; outcome: ExtractionOutcome; extractedAtTick: number | null }[] };
 export const MATCH_RULES = { durationTicks: 90 * TICK_RATE } as const;
+export const POWERUP_RULES = { count: 3, radius: 12, speedDurationTicks: 5 * TICK_RATE, bonusScore: 150, spawnTicks: [10 * TICK_RATE, 35 * TICK_RATE, 55 * TICK_RATE] } as const;
+export type PowerupKind = 'speed' | 'bonus' | 'energy';
+export type PowerupState = { id: string; kind: PowerupKind; position: Vector; active: boolean; collectedBy: string | null };
+export type ArenaLayoutState = { id: 'grid' | 'vault' | 'crossroads'; label: string; obstacles: { x: number; y: number; width: number; height: number }[] };
 export type MatchRanking = { id: string; slot: number; rank: number; score: number; coresCollected: number; extractionOutcome?: ExtractionOutcome };
 export type MatchResults = { matchId: string; durationTicks: number; outcome: 'winner' | 'tie' | 'empty'; winnerIds: string[]; rankings: MatchRanking[] };
 export type MatchState = { id: string; phase: 'ACTIVE' | 'RESULTS'; durationTicks: number; endedAtTick: number | null; results: MatchResults | null };
@@ -41,14 +45,14 @@ export type CoreState = { id: string; position: Vector; active: boolean };
 export type ScoreState = { id: string; score: number; combo: number; multiplier: number; comboExpiresAtTick: number };
 export type CollectionEvent = { sequence: number; tick: number; coreId: string; playerId: string; position: Vector; points: number; multiplier: number };
 export type AbilityState = { id: string; dashUntilTick: number; dashReadyAtTick: number; dashDirection: Vector;
-  shieldUntilTick: number; shieldReadyAtTick: number };
+  shieldUntilTick: number; shieldReadyAtTick: number; speedUntilTick?: number };
 export type AbilityEvent = { sequence: number; tick: number; playerId: string; ability: AbilityKind; position: Vector; direction: Vector };
 export type SweepPattern = 'horizontal-up' | 'horizontal-down' | 'vertical-left' | 'vertical-right';
 export type LaserState = { id: string; axis: 'x' | 'y'; coordinate: number; phase: 'idle' | 'warning' | 'active'; warningAtTick: number; activeAtTick: number; endsAtTick: number; pattern?: SweepPattern; stage?: 1 | 2 | 3; previousCoordinate?: number; motion?: { from: number; to: number; speed: number; direction: 1 | -1 } };
 export type PlayerVitals = { id: string; health: number; life: 'alive' | 'respawning'; respawnAtTick: number; invulnerableUntilTick: number; respawnPosition: Vector };
 export type HealthEvent = { sequence: number; tick: number; playerId: string; kind: 'damage' | 'shield_blocked' | 'invulnerable_blocked' | 'death' | 'respawn'; hazardId: string | null; position: Vector; health: number; amount: number };
 export type GameplaySnapshot = { difficultyStage?: 1 | 2 | 3; extraction?: ExtractionState; tick: number; cores: CoreState[]; scores: ScoreState[]; events: CollectionEvent[];
-  abilities?: AbilityState[]; abilityEvents?: AbilityEvent[]; hazards?: LaserState[]; vitals?: PlayerVitals[]; healthEvents?: HealthEvent[]; match?: MatchState };
+  abilities?: AbilityState[]; abilityEvents?: AbilityEvent[]; hazards?: LaserState[]; vitals?: PlayerVitals[]; healthEvents?: HealthEvent[]; match?: MatchState; powerups?: PowerupState[]; arena?: ArenaLayoutState };
 export type Snapshot = { type: 'snapshot'; version: 1; epoch: string; tick: number; players: PlayerState[]; gameplay?: GameplaySnapshot };
 export type ErrorCode = 'INVALID_MESSAGE' | 'AUTH_REQUIRED' | 'INVALID_SESSION' | 'AUTH_UNAVAILABLE' | 'SESSION_IN_USE' | 'ARENA_FULL' | 'STALE_SEQUENCE' | 'RATE_LIMITED' | 'SERVER_CLOSING' | 'ROOM_REQUIRED' | 'NOT_MEMBER' | 'MATCH_UNAVAILABLE' | 'ROOM_UNAVAILABLE';
 export type ProtocolError = { type: 'error'; version: 1; code: ErrorCode; message: string };
@@ -253,4 +257,19 @@ function validExtraction(value: unknown, tick: number, match: unknown): value is
     ids.add(player.id);
   }
   return true;
+}
+
+// HTTP transport envelopes reuse the validated movement/ability/lifecycle protocol.
+export const HTTP_GAME_RULES = { activePollMs: 100, resultsPollMs: 600, sessionIdleMs: 3000, maximumBatch: 8, requestTimeoutMs: 5000 } as const;
+export type HttpConnectRequest = { requestId: string; roomId?: string; matchId?: string };
+export type HttpStepRequest = { actions: Exclude<ClientMessage, Authenticate>[] };
+export type HttpGameResponse = { messages: ServerMessage[] };
+export function parseHttpGameResponse(raw: string): HttpGameResponse | null {
+  if (raw.length > 65536) return null;
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { return null; }
+  if (!object(value) || !exactKeys(value, ['messages']) || !Array.isArray(value.messages) || value.messages.length > 34) return null;
+  const messages = value.messages.map(m => parseServerMessage(JSON.stringify(m)));
+  if (messages.some(m => !m)) return null;
+  return { messages: messages as ServerMessage[] };
 }

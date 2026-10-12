@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { rejectBrowserSecrets, validateBrowserEnvironment, validatePublicKey } from './configuration.ts';
+import { rejectBrowserSecrets, validateBrowserEnvironment, validatePublicKey } from './legacy-websocket-configuration.ts';
 const env = { VITE_SUPABASE_URL: 'https://project.supabase.co', VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test_fixture', VITE_GAME_SERVER_URL: 'wss://game.example.com/ws' };
 const jwt = (role: string) => `eyJhbGciOiJIUzI1NiJ9.${btoa(JSON.stringify({ role }))}.fixture`;
 it('accepts secure public production configuration and anon keys', () => {

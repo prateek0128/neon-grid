@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './http-test';
 
 // The local Playwright artifact transport truncates this two-context trace on close.
 // Assertions and the collection screenshot still run; other regressions retain traces.

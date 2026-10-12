@@ -1,27 +1,29 @@
-import { CORE_RULES, HAZARD_RULES, MATCH_RULES, EXTRACTION_RULES } from '@neon/protocol';
-import type { AbilityEvent, AbilityState, CoreState, GameplaySnapshot, HealthEvent, LaserState, PlayerState, PlayerVitals, Vector, MatchState, MatchRanking } from '@neon/protocol';
+import { CORE_RULES, HAZARD_RULES, MATCH_RULES, EXTRACTION_RULES, POWERUP_RULES } from '@neon/protocol';
+import type { AbilityEvent, AbilityState, CoreState, GameplaySnapshot, HealthEvent, LaserState, PlayerState, PlayerVitals, Vector, MatchState, MatchRanking, PowerupState } from '@neon/protocol';
 import { ARENA, spawnPosition } from './index.ts';
+import { layoutForGeneration, type ArenaLayout, validLayoutPosition } from './arena-layouts.ts';
 import { advanceHazards, laserAtTick, playerAlive } from './hazards.ts';
 
 export { CORE_RULES } from '@neon/protocol';
 type Core = CoreState & { respawnAtTick: number };
 export type GameplayState = Omit<GameplaySnapshot, 'cores' | 'abilities' | 'abilityEvents' | 'vitals' | 'hazards' | 'healthEvents' | 'match'> & {
   cores: Core[]; abilities: AbilityState[]; abilityEvents: AbilityEvent[]; vitals: PlayerVitals[]; hazards: LaserState[];
-  match: MatchState; participants: Map<string, Omit<MatchRanking, 'rank'>>; healthEvents: HealthEvent[]; hazardHits: Map<string, string>; nextCore: number; nextEvent: number };
+  match: MatchState; participants: Map<string, Omit<MatchRanking, 'rank'>>; healthEvents: HealthEvent[]; hazardHits: Map<string, string>; nextCore: number; nextEvent: number; arena: ArenaLayout; powerups: (PowerupState & { spawnAtTick: number })[] };
 export type GameplayPlayer = Pick<PlayerState, 'id' | 'slot' | 'position' | 'connected'> & { previousPosition?: Vector };
 
 export function createGameplay(durationTicks: number = MATCH_RULES.durationTicks, generationId: string = crypto.randomUUID(), extractionWindowTicks: number = EXTRACTION_RULES.windowTicks): GameplayState {
   if (!Number.isSafeInteger(durationTicks) || durationTicks < 1) throw new Error('Match duration must be a positive number of ticks.');
   if (!Number.isSafeInteger(extractionWindowTicks) || extractionWindowTicks < 1) throw new Error('Extraction window must be positive ticks.');
-  return { difficultyStage: 1, extraction: { phase: durationTicks <= extractionWindowTicks ? 'open' : 'closed', opensAtTick: Math.max(0, durationTicks - extractionWindowTicks), closesAtTick: durationTicks, remainingTicks: durationTicks, zone: { ...EXTRACTION_RULES.zone }, players: [] }, match: { id: generationId, phase: 'ACTIVE', durationTicks, endedAtTick: null, results: null }, participants: new Map(), tick: 0, cores: [], scores: [], events: [], abilities: [], abilityEvents: [], vitals: [], hazards: [laserAtTick(0)], healthEvents: [], hazardHits: new Map(), nextCore: 1, nextEvent: 1 };
+  const arena = layoutForGeneration(generationId);
+  return { difficultyStage: 1, arena, powerups: POWERUP_RULES.spawnTicks.map((spawnAtTick, index) => ({ id: `powerup-${index + 1}`, kind: (['speed', 'bonus', 'energy'] as const)[index]!, position: { x: 0, y: 0 }, active: false, collectedBy: null, spawnAtTick })), extraction: { phase: durationTicks <= extractionWindowTicks ? 'open' : 'closed', opensAtTick: Math.max(0, durationTicks - extractionWindowTicks), closesAtTick: durationTicks, remainingTicks: durationTicks, zone: { ...arena.extractionZone }, players: [] }, match: { id: generationId, phase: 'ACTIVE', durationTicks, endedAtTick: null, results: null }, participants: new Map(), tick: 0, cores: [], scores: [], events: [], abilities: [], abilityEvents: [], vitals: [], hazards: [laserAtTick(0)], healthEvents: [], hazardHits: new Map(), nextCore: 1, nextEvent: 1 };
 }
 
 // The arena has no interior walls. Cell centers are inside its solid boundary.
-export function validCoreCells(players: GameplayPlayer[], cores: CoreState[]) {
+export function validCoreCells(players: GameplayPlayer[], cores: CoreState[], arena?: ArenaLayout) {
   const cells = [];
   const cell = CORE_RULES.cellSize;
   for (let y = cell / 2; y < ARENA.height; y += cell) for (let x = cell / 2; x < ARENA.width; x += cell) {
-    if (players.some(p => (Math.floor(p.position.x / cell) === Math.floor(x / cell) && Math.floor(p.position.y / cell) === Math.floor(y / cell)) ||
+    if ((arena && !validLayoutPosition({ x, y }, arena)) || players.some(p => (Math.floor(p.position.x / cell) === Math.floor(x / cell) && Math.floor(p.position.y / cell) === Math.floor(y / cell)) ||
       Math.hypot(p.position.x - x, p.position.y - y) <= ARENA.radius + CORE_RULES.radius)) continue;
     if (cores.some(c => c.position.x === x && c.position.y === y)) continue;
     cells.push({ x, y });
@@ -30,7 +32,7 @@ export function validCoreCells(players: GameplayPlayer[], cores: CoreState[]) {
 }
 
 function spawn(state: GameplayState, players: GameplayPlayer[], random: () => number): Core | null {
-  const cells = validCoreCells(players, state.cores);
+  const cells = validCoreCells(players, state.cores, state.arena);
   if (!cells.length) return null;
   const choice = Math.min(cells.length - 1, Math.max(0, Math.floor(random() * cells.length)));
   return { id: `core-${state.nextCore++}`, position: cells[choice]!, active: true, respawnAtTick: 0 };
@@ -49,7 +51,7 @@ export function reconcileGameplay(state: GameplayState, players: GameplayPlayer[
     state.vitals.push({ id: player.id, health: HAZARD_RULES.maxHealth, life: 'alive', respawnAtTick: 0, invulnerableUntilTick: 0, respawnPosition: spawnPosition(player.slot) });
   }
   for (const player of players) if (!state.abilities.some(s => s.id === player.id)) {
-    state.abilities.push({ id: player.id, dashUntilTick: 0, dashReadyAtTick: 0, dashDirection: { x: 0, y: 0 }, shieldUntilTick: 0, shieldReadyAtTick: 0 });
+    state.abilities.push({ id: player.id, dashUntilTick: 0, dashReadyAtTick: 0, dashDirection: { x: 0, y: 0 }, shieldUntilTick: 0, shieldReadyAtTick: 0, speedUntilTick: 0 });
   }
   for (const player of [...players].sort((a, b) => a.slot - b.slot)) if (!state.scores.some(s => s.id === player.id)) {
     state.scores.push({ id: player.id, score: 0, combo: 0, multiplier: 1, comboExpiresAtTick: 0 });
@@ -70,6 +72,22 @@ export function advanceGameplay(state: GameplayState, players: GameplayPlayer[],
   }
   // Stable slot order decides ties; each core is marked inactive before another can win it.
   const connected = players.filter(p => p.connected && playerAlive(state, p.id)).sort((a, b) => a.slot - b.slot || a.id.localeCompare(b.id));
+  for (const powerup of state.powerups) {
+    if (!powerup.active && powerup.collectedBy === null && state.tick >= powerup.spawnAtTick) {
+      const cells = validCoreCells(players, state.cores, state.arena).filter(cell => !state.powerups.some(other => other.active && other.position.x === cell.x && other.position.y === cell.y));
+      if (cells.length) { powerup.position = { ...cells[Math.min(cells.length - 1, Math.max(0, Math.floor(random() * cells.length)))]! }; powerup.active = true; }
+    }
+    if (!powerup.active) continue;
+    const winner = connected.find(player => Math.hypot(player.position.x - powerup.position.x, player.position.y - powerup.position.y) <= ARENA.radius + POWERUP_RULES.radius);
+    if (!winner) continue;
+    powerup.active = false; powerup.collectedBy = winner.id;
+    const ability = state.abilities.find(value => value.id === winner.id);
+    const score = state.scores.find(value => value.id === winner.id);
+    const participant = state.participants.get(winner.id);
+    if (powerup.kind === 'speed' && ability) ability.speedUntilTick = state.tick + POWERUP_RULES.speedDurationTicks;
+    if (powerup.kind === 'energy' && ability) { ability.dashReadyAtTick = state.tick; ability.shieldReadyAtTick = state.tick; }
+    if (powerup.kind === 'bonus' && score && participant) { score.score += POWERUP_RULES.bonusScore; participant.score += POWERUP_RULES.bonusScore; }
+  }
   for (const core of state.cores) {
     if (!core.active) continue;
     const winner = connected.find(p => state.scores.some(s => s.id === p.id) &&
@@ -109,7 +127,7 @@ export function advanceGameplay(state: GameplayState, players: GameplayPlayer[],
 }
 
 export function gameplaySnapshot(state: GameplayState): GameplaySnapshot {
-  return { difficultyStage: state.difficultyStage, extraction: structuredClone(state.extraction), match: structuredClone(state.match), tick: state.tick, cores: state.cores.map(c => ({ id: c.id, position: { ...c.position }, active: c.active })),
+  return { difficultyStage: state.difficultyStage, arena: { id: state.arena.id, label: state.arena.label, obstacles: structuredClone(state.arena.obstacles) }, powerups: state.powerups.map(powerup => ({ id: powerup.id, kind: powerup.kind, position: { ...powerup.position }, active: powerup.active, collectedBy: powerup.collectedBy })), extraction: structuredClone(state.extraction), match: structuredClone(state.match), tick: state.tick, cores: state.cores.map(c => ({ id: c.id, position: { ...c.position }, active: c.active })),
     scores: state.scores.map(s => ({ ...s })), events: state.events.map(e => ({ ...e, position: { ...e.position } })),
     abilities: state.abilities.map(a => ({ ...a, dashDirection: { ...a.dashDirection } })),
     abilityEvents: state.abilityEvents.map(e => ({ ...e, position: { ...e.position }, direction: { ...e.direction } })),

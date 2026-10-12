@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import type { RoomArena, ServerMessage, Snapshot, Welcome } from '@neon/protocol';
 import { RECONNECT_GRACE_MS } from '@neon/protocol';
-import { createGameServer } from './server.ts';
+import { createGameServer } from './legacy-websocket-server.ts';
 
 const origin = 'http://localhost:5173';
 const userA = randomUUID(); const userB = randomUUID();

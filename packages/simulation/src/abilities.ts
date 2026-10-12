@@ -36,7 +36,8 @@ export function advanceAbilityPosition(state: GameplayState, playerId: string, p
   const dashing = ability && state.tick < ability.dashUntilTick;
   const direction = dashing ? ability.dashDirection : normalizeMovement(movement);
   // Six normal fixed steps with a speed multiplier, retaining the same solid-boundary clamp.
-  return advancePosition(position, direction, (dashing ? ABILITY_RULES.dashSpeedMultiplier : 1) / TICK_RATE);
+  const speed = ability && state.tick < (ability.speedUntilTick ?? 0) ? 1.35 : 1;
+  return advancePosition(position, direction, speed * (dashing ? ABILITY_RULES.dashSpeedMultiplier : 1) / TICK_RATE, state.arena);
 }
 
 export function cancelDash(state: GameplayState, playerId: string) {

@@ -1,3 +1,5 @@
+> Current transport: HTTP-only gameplay. Follow [the migration report](http-only-migration-report.md); WebSocket instructions below are historical and superseded. Database fencing, one-replica limits, and secret boundaries remain applicable.
+
 # Production deployment runbook
 
 These configurations are templates. They do not provision or deploy services. Use a controlled test room before admitting players.

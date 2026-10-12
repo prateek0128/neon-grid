@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
 import type { ServerMessage, Welcome, Snapshot } from '@neon/protocol';
-import { createGameServer } from './server.ts';
+import { createGameServer } from './legacy-websocket-server.ts';
 import { createSupabaseVerifier } from './auth.ts';
 import { createAuthFixture } from '../../../tests/auth-fixture.ts';
 

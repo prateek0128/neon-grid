@@ -4,7 +4,7 @@ import { request } from 'node:http';
 import { connect, type AddressInfo } from 'node:net';
 import { expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
-import { createGameServer } from './server.ts';
+import { createGameServer } from './legacy-websocket-server.ts';
 import { RoomAuthorityError } from './rooms.ts';
 const origin = 'https://web.example.com';
 async function listen(server: ReturnType<typeof createGameServer>) {
@@ -180,11 +180,13 @@ it('preserves pending and failed readiness diagnostics after connection log exha
     rooms: { authorize: async () => null, tick: () => new Promise((_resolve, reject) => { fail = reject; }) } });
   const url = await listen(server);
   try {
-    for (let i = 0; i < 31; i++) {
+    for (let i = 0; i < 61; i++) {
       const ws = new WebSocket(url.replace('http:', 'ws:') + '/invalid?private-test-sentinel', { origin });
       await once(ws, 'error');
     }
     expect(diagnostic).toHaveBeenCalledWith({ event: 'diagnostics_limited', scope: 'connections' });
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'diagnostics_limited', scope: 'admission' });
+    expect(diagnostic.mock.calls.filter(([event]) => event.event === 'upgrade_rejected')).toHaveLength(60);
     expect((await fetch(url + '/ready')).status).toBe(503);
     expect(diagnostic).toHaveBeenCalledWith({ event: 'readiness', condition: 'authority_pending', syncInFlight: true });
     fail(new RoomAuthorityError('lease_busy'));
@@ -203,4 +205,81 @@ it('does not report recovery if arena processing fails after a successful RPC', 
     expect(diagnostic).toHaveBeenCalledWith({ event: 'readiness', condition: 'authority_unhealthy', syncInFlight: false, authorityFailure: 'unknown' });
     expect(diagnostic).not.toHaveBeenCalledWith({ event: 'authority_recovered' });
   } finally { await server.close(); }
+});
+it('rejects the production-origin handshake before auth during lease contention, then sends the initial match snapshot after recovery', async () => {
+  const productionOrigin = 'https://neon-grid-tau.vercel.app';
+  const roomId = randomUUID(), matchId = randomUUID(), userId = randomUUID(), memberId = randomUUID();
+  let busy = true;
+  const release = () => { busy = false; };
+  const verifyToken = vi.fn(async () => ({ userId, expiresAt: Date.now() + 60000 }));
+  const authorize = vi.fn(async () => ({ id: memberId, slot: 1 }));
+  const diagnostic = vi.fn();
+  const server = createGameServer({ allowedOrigins: [productionOrigin], verifyToken, diagnostic,
+    rooms: { authorize, tick: async () => {
+      if (busy) throw new RoomAuthorityError('lease_busy');
+      return [{ roomId, matchId, startedAt: new Date().toISOString(), members: [{ id: memberId, userId, slot: 1 }] }];
+    } } });
+  const url = await listen(server);
+  let connected: WebSocket | undefined;
+  try {
+    const rejected = new WebSocket(url.replace('http:', 'ws:') + '/ws', { origin: productionOrigin });
+    const [error] = await once(rejected, 'error');
+    expect(String(error)).toContain('503');
+    expect(verifyToken).not.toHaveBeenCalled(); expect(authorize).not.toHaveBeenCalled();
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'authority_unavailable', reason: 'lease_busy' });
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'upgrade_rejected', reason: 'not_ready', status: 503 });
+    expect((await fetch(url + '/health')).status).toBe(200);
+    expect((await fetch(url + '/ready')).status).toBe(503);
+    release();
+    await vi.waitFor(async () => expect((await fetch(url + '/ready')).status).toBe(200), { timeout: 3000 });
+    connected = new WebSocket(url.replace('http:', 'ws:') + '/ws', { origin: productionOrigin });
+    const received: unknown[] = [];
+    connected.on('message', raw => received.push(JSON.parse(raw.toString())));
+    await once(connected, 'open');
+    connected.send(JSON.stringify({ type: 'authenticate', version: 1, accessToken: 'fixture-only-valid-token', roomId, matchId }));
+    await vi.waitFor(() => expect(received).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'welcome', playerId: memberId }),
+      expect.objectContaining({ type: 'snapshot', gameplay: expect.objectContaining({ match: expect.objectContaining({ id: matchId }), hazards: expect.any(Array) }) }),
+    ])));
+    expect(verifyToken).toHaveBeenCalledTimes(1); expect(authorize).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('fixture-only-valid-token');
+  } finally { release(); connected?.terminate(); await server.close(); }
+});
+it('identifies capacity 403 before authentication and admits a new socket after a slot is released', async () => {
+  const diagnostic = vi.fn(), verifyToken = vi.fn(async () => null);
+  const productionOrigin = 'https://neon-grid-tau.vercel.app';
+  const server = createGameServer({ allowedOrigins: [productionOrigin], allowTestArena: true, verifyToken, diagnostic });
+  const url = await listen(server); const sockets: WebSocket[] = [];
+  try {
+    for (let n = 0; n < 32; n++) {
+      const ws = new WebSocket(url.replace('http:', 'ws:') + '/ws', { origin: productionOrigin });
+      sockets.push(ws); await once(ws, 'open');
+    }
+    const rejected = new WebSocket(url.replace('http:', 'ws:') + '/ws', { origin: productionOrigin });
+    const [error] = await once(rejected, 'error'); expect(String(error)).toContain('403');
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'upgrade_rejected', reason: 'capacity', status: 403 });
+    expect(verifyToken).not.toHaveBeenCalled();
+    const closed = once(sockets[0]!, 'close'); sockets[0]!.close(); await closed;
+    const admitted = new WebSocket(url.replace('http:', 'ws:') + '/ws', { origin: productionOrigin });
+    sockets.push(admitted); await once(admitted, 'open');
+  } finally { sockets.forEach(ws => ws.terminate()); await server.close(); }
+});
+it.each(['INVALID_SESSION', 'NOT_MEMBER'] as const)('reports %s after upgrade, never as an HTTP 403', async code => {
+  const diagnostic = vi.fn(); const roomId = randomUUID(), matchId = randomUUID(), userId = randomUUID(), memberId = randomUUID();
+  const server = createGameServer({ allowedOrigins: [origin], diagnostic,
+    verifyToken: async () => code === 'INVALID_SESSION' ? null : ({ userId, expiresAt: Date.now() + 60000 }),
+    rooms: { authorize: async () => null, tick: async () => [{ roomId, matchId, startedAt: new Date().toISOString(), members: [{ id: memberId, userId, slot: 1 }] }] } });
+  const url = await listen(server); let ws: WebSocket | undefined;
+  try {
+    await vi.waitFor(async () => expect((await fetch(url + '/ready')).status).toBe(200));
+    ws = new WebSocket(url.replace('http:', 'ws:') + '/ws', { origin }); await once(ws, 'open');
+    const received = once(ws, 'message'), closed = once(ws, 'close');
+    ws.send(JSON.stringify({ type: 'authenticate', version: 1, accessToken: 'fixture-only-invalid-session', roomId, matchId }));
+    expect(JSON.parse(String((await received)[0]))).toMatchObject({ type: 'error', code });
+    expect((await closed)[0]).toBe(1008);
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'upgrade_accepted', status: 101 });
+    expect(diagnostic).toHaveBeenCalledWith({ event: 'message_rejected', code });
+    expect(diagnostic).not.toHaveBeenCalledWith(expect.objectContaining({ event: 'upgrade_rejected' }));
+    expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('fixture-only-invalid-session');
+  } finally { ws?.terminate(); await server.close(); }
 });
