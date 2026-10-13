@@ -46,6 +46,22 @@ it('backs off failed authority and recovers without a client-owned clock', async
   await vi.advanceTimersByTimeAsync(499); expect(fetcher).toHaveBeenCalledTimes(1);
   await vi.advanceTimersByTimeAsync(1); expect(view.mock.lastCall?.[0].status).toBe('connected'); stop();
 });
+it('leaves the transient reconnecting state during a sustained authority outage and recovers automatically', async () => {
+  const fetcher = vi.fn()
+    .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'AUTHORITY_UNAVAILABLE' }), { status: 503 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'AUTHORITY_UNAVAILABLE' }), { status: 503 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'AUTHORITY_UNAVAILABLE' }), { status: 503 }))
+    .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'AUTHORITY_UNAVAILABLE' }), { status: 503 }))
+    .mockResolvedValue(response([welcome, snapshot()]));
+  vi.stubGlobal('fetch', fetcher);
+  const view = vi.fn(), stop = connectGame(auth(), 'https://game.example.com/', view);
+  await vi.advanceTimersByTimeAsync(3500);
+  expect(view.mock.lastCall?.[0]).toMatchObject({ status: 'error', snapshot: null });
+  expect(view.mock.lastCall?.[0].detail).toContain('membership is preserved');
+  await vi.advanceTimersByTimeAsync(4000);
+  expect(view.mock.lastCall?.[0].status).toBe('connected');
+  stop();
+});
 it('retains the identical sequenced action body after a lost response', async () => {
   const fetcher = vi.fn().mockResolvedValueOnce(response([welcome, snapshot()])).mockRejectedValueOnce(Error('network')).mockResolvedValue(response([snapshot()]));
   vi.stubGlobal('fetch', fetcher); const stop = connectGame(auth(), 'https://game.example.com/', vi.fn());

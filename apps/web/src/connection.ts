@@ -3,6 +3,9 @@ import { HTTP_GAME_RULES, PROTOCOL_VERSION, parseHttpGameResponse, parseServerMe
 import type { AbilityKind, ClientMessage, Snapshot, Vector } from '@neon/protocol';
 import { attachKeyboard } from './keyboard';
 export type ConnectionView = { status: 'connecting' | 'connected' | 'reconnecting' | 'disconnected' | 'error'; detail: string; playerId: string | null; snapshot: Snapshot | null; abilityNotice?: string; lifecycleNotice?: string; replayPending?: boolean };
+class GameRequestError extends Error {
+  constructor(readonly status: number, message: string) { super(message); }
+}
 export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (view: ConnectionView) => void, room?: { roomId: string; matchId: string }) {
   let stopped = false, inFlight = false, sessionId: string | null = null, sequence = 0, failures = 0;
   const storageKey = 'neon-grid-http:' + serverUrl + ':' + (room?.roomId ?? 'lab') + ':' + (room?.matchId ?? 'lab');
@@ -39,7 +42,7 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
           if (result.error === 'INVALID_SESSION' || result.messages?.some(raw => (raw as { type?: string; code?: string }).type === 'error' && (raw as { code?: string }).code === 'INVALID_SESSION')) await auth.auth.refreshSession();
         }
         if (response.status === 409 && ['SEQUENCE_CONFLICT', 'STALE_SEQUENCE'].includes(result.error ?? '')) { pending = null; needsResume = true; }
-        throw new Error(response.status === 503 ? 'Game server unavailable. Retrying…' : response.status === 403 ? 'Game server refused the connection. Retrying…' : 'Connection interrupted. Retrying…');
+        throw new GameRequestError(response.status, response.status === 503 ? 'Game server unavailable. Retrying…' : response.status === 403 ? 'Game server refused the connection. Retrying…' : 'Connection interrupted. Retrying…');
       }
       const parsed = parseHttpGameResponse(JSON.stringify(result));
       if (!parsed) throw new Error('Invalid HTTP state response.');
@@ -111,7 +114,13 @@ export function connectGame(auth: SupabaseClient, serverUrl: string, onView: (vi
       failures = 0;
     } catch (cause) {
       movement = { x: 0, y: 0 };
-      if (!stopped) update({ status: 'reconnecting', detail: cause instanceof TypeError ? 'Connection interrupted. Retrying…' : cause instanceof Error ? cause.message : 'Connection interrupted.' });
+      const nextFailure = failures + 1;
+      if (!stopped) {
+        const authorityOutage = cause instanceof GameRequestError && cause.status === 503;
+        update(authorityOutage && nextFailure >= 4
+          ? { status: 'error', detail: 'Game server authority is still unavailable. Your room membership is preserved; reconnecting automatically…' }
+          : { status: 'reconnecting', detail: cause instanceof TypeError ? 'Connection interrupted. Retrying…' : cause instanceof Error ? cause.message : 'Connection interrupted.' });
+      }
       delay = Math.min(500 * 2 ** Math.min(failures++, 4), 8000);
     } finally {
       inFlight = false;
