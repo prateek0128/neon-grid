@@ -82,6 +82,10 @@ VITE_GAME_SERVER_URL=https://neon-grid-server-uske.onrender.com/ pnpm build
 
 An initial full-suite run found that a barrier overlapped a long-standing Dash regression route. The barriers were moved to preserve that existing normal route; the focused server/simulation rerun passed 13 tests, and the complete suite then passed. A browser attempt that assumed the cosmetics picker remained visible in-room was corrected to verify persisted local storage after reload. These failed diagnostic attempts are not counted as passing validation.
 
+Final safety review found that respawn selection had not received the new layout filter. It now excludes obstacle cells, and the snapshot parser validates optional arena, power-up and speed fields instead of accepting malformed additive state. Final focused simulation/protocol validation passed **20 tests across 3 files**. The final complete repeat passed **298 tests across 34 files in 106.30 seconds**; TypeScript and the public-HTTPS production build passed again, and `git diff --check` passed.
+
+The final post-correction browser check, `NEON_TEST_WEB_PORT=5174 pnpm exec playwright test tests/browser/feature-expansion.spec.ts`, passed: **one scenario in 17.8 seconds**.
+
 ## Manual verification
 
 1. In two isolated browser profiles, create/join, ready and start. Confirm both receive the same layout title, barriers, extraction zone and power-up positions.
@@ -95,3 +99,7 @@ An initial full-suite run found that a barrier overlapped a long-standing Dash r
 - Personal records and cosmetics are intentionally local-only. No durable cross-device stats, shared cosmetic profile or unlock inventory was added because doing so securely requires new authenticated database/RPC work.
 - Layout selection is deterministic per generation, rather than host-selectable, to avoid an extra pre-match protocol and persistence flow.
 - Automated checks are local fixtures; production, physical-device and non-Chromium verification remain unperformed.
+
+## Final working-tree review
+
+No files were staged, committed or deployed. The pre-existing HTTP migration, final-audit and investigation changes remain in the working tree. The complete diff was reviewed and whitespace validation passed. The expansion adds only shared simulation/protocol, web presentation/storage, tests and this report; it does not alter Supabase migrations, RLS, authentication settings, environment files or production resources.

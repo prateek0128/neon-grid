@@ -4,8 +4,8 @@ export type ArenaLayoutId = 'grid' | 'vault' | 'crossroads';
 export type ArenaLayout = { id: ArenaLayoutId; label: string; extractionZone: { x: number; y: number; radius: number }; obstacles: { x: number; y: number; width: number; height: number }[] };
 export const ARENA_LAYOUTS: readonly ArenaLayout[] = [
   { id: 'grid', label: 'Neon Grid', extractionZone: { x: 480, y: 320, radius: 60 }, obstacles: [] },
-  { id: 'vault', label: 'Data Vault', extractionZone: { x: 480, y: 320, radius: 60 }, obstacles: [{ x: 650, y: 100, width: 100, height: 120 }, { x: 650, y: 420, width: 100, height: 120 }] },
-  { id: 'crossroads', label: 'Crossroads', extractionZone: { x: 480, y: 320, radius: 60 }, obstacles: [{ x: 280, y: 400, width: 140, height: 80 }, { x: 540, y: 400, width: 140, height: 80 }] },
+  { id: 'vault', label: 'Data Vault', extractionZone: { x: 480, y: 320, radius: 60 }, obstacles: [{ x: 720, y: 100, width: 100, height: 120 }, { x: 720, y: 420, width: 100, height: 120 }] },
+  { id: 'crossroads', label: 'Crossroads', extractionZone: { x: 480, y: 320, radius: 60 }, obstacles: [{ x: 120, y: 400, width: 140, height: 80 }, { x: 720, y: 400, width: 140, height: 80 }] },
 ] as const;
 export function layoutForGeneration(generation: string): ArenaLayout {
   const value = [...generation].reduce((total, character) => total + character.charCodeAt(0), 0);

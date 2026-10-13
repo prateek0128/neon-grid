@@ -50,7 +50,7 @@ function respawnCollision(laser: LaserState, position: Vector) {
 export function playerAlive(state: GameplayState, id: string) { return state.vitals.some(v => v.id === id && v.life === 'alive') && (!state.extraction || state.extraction.players.find(p => p.id === id)?.outcome === 'alive'); }
 export function safeRespawnPosition(state: GameplayState, player: GameplayPlayer, players: GameplayPlayer[]): Vector {
   const origin = spawnPosition(player.slot);
-  const cells = validCoreCells(players.filter(p => p.id !== player.id), state.cores).filter(p =>
+  const cells = validCoreCells(players.filter(p => p.id !== player.id), state.cores, state.arena).filter(p =>
     !players.some(other => other.id !== player.id && Math.hypot(other.position.x - p.x, other.position.y - p.y) <= ARENA.radius * 2) &&
     !state.hazards.some(h => h.phase !== 'idle' && respawnCollision(h, p)));
   cells.sort((a, b) => Math.hypot(a.x - origin.x, a.y - origin.y) - Math.hypot(b.x - origin.x, b.y - origin.y) || a.y - b.y || a.x - b.x);

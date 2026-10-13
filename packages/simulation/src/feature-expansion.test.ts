@@ -31,12 +31,11 @@ it('never exposes the server-only power-up spawn deadline in snapshots', () => {
   const state = setup();
   expect(JSON.stringify(gameplaySnapshot(state).powerups)).not.toContain('spawnAtTick');
 });
-it('keeps the pre-existing strict snapshot shape valid alongside additive state', () => {
+it('validates authoritative arena, power-up and speed fields in snapshots', () => {
   const state = setup();
   const gameplay = gameplaySnapshot(state);
-  // The existing protocol parser remains strict for its original required shape.
-  for (const ability of gameplay.abilities ?? []) delete ability.speedUntilTick;
-  delete gameplay.powerups; delete gameplay.arena;
   const raw = JSON.stringify({ type: 'snapshot', version: 1, epoch: '11111111-1111-4111-8111-111111111111', tick: 0, players: [{ ...player, lastSequence: -1 }], gameplay });
   expect(parseServerMessage(raw)).not.toBeNull();
+  gameplay.powerups![0]!.kind = 'forged' as never;
+  expect(parseServerMessage(JSON.stringify({ type: 'snapshot', version: 1, epoch: '11111111-1111-4111-8111-111111111111', tick: 0, players: [{ ...player, lastSequence: -1 }], gameplay }))).toBeNull();
 });

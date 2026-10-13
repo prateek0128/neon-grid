@@ -159,7 +159,7 @@ function validGameplay(value: unknown): value is GameplaySnapshot {
       if (!object(ability) || !identifier(ability.id) || abilityIds.has(ability.id) || !scoreIds.has(ability.id) ||
           !nonnegativeInteger(ability.dashUntilTick) || !nonnegativeInteger(ability.dashReadyAtTick) ||
           !nonnegativeInteger(ability.shieldUntilTick) || !nonnegativeInteger(ability.shieldReadyAtTick) ||
-          ability.dashUntilTick > ability.dashReadyAtTick || ability.shieldUntilTick > ability.shieldReadyAtTick || !direction(ability.dashDirection)) return false;
+          (ability.speedUntilTick !== undefined && !nonnegativeInteger(ability.speedUntilTick)) || ability.dashUntilTick > ability.dashReadyAtTick || ability.shieldUntilTick > ability.shieldReadyAtTick || !direction(ability.dashDirection)) return false;
       abilityIds.add(ability.id);
     }
     const sequences = new Set(value.events.map(e => (e as CollectionEvent).sequence));
@@ -212,6 +212,17 @@ function validGameplay(value: unknown): value is GameplaySnapshot {
       previous = event.sequence;
     }
   } else if (value.hazards !== undefined || value.healthEvents !== undefined) return false;
+  if (value.powerups !== undefined) {
+    if (!Array.isArray(value.powerups) || value.powerups.length > POWERUP_RULES.count) return false;
+    const ids = new Set<string>();
+    for (const powerup of value.powerups) if (!object(powerup) || typeof powerup.id !== 'string' || !/^powerup-[1-3]$/.test(powerup.id) || ids.has(powerup.id) ||
+      (powerup.kind !== 'speed' && powerup.kind !== 'bonus' && powerup.kind !== 'energy') || !position(powerup.position) || typeof powerup.active !== 'boolean' ||
+      (powerup.collectedBy !== null && !identifier(powerup.collectedBy)) || (powerup.active && powerup.collectedBy !== null)) return false; else ids.add(powerup.id);
+  }
+  if (value.arena !== undefined) {
+    if (!object(value.arena) || (value.arena.id !== 'grid' && value.arena.id !== 'vault' && value.arena.id !== 'crossroads') || typeof value.arena.label !== 'string' || value.arena.label.length > 32 || !Array.isArray(value.arena.obstacles) || value.arena.obstacles.length > 2) return false;
+    for (const obstacle of value.arena.obstacles) if (!object(obstacle) || !finite(obstacle.x) || !finite(obstacle.y) || !finite(obstacle.width) || !finite(obstacle.height) || obstacle.x < 0 || obstacle.y < 0 || obstacle.width <= 0 || obstacle.height <= 0 || obstacle.x + obstacle.width > 960 || obstacle.y + obstacle.height > 640) return false;
+  }
   return true;
 }
 
