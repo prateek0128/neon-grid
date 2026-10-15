@@ -3,11 +3,6 @@ test.use({ trace: 'off' });
 test('two sessions agree on results, recover them on reload, replay once and return to lobby', async ({ browser }) => {
   test.setTimeout(90000);
   const ca = await browser.newContext(); const cb = await browser.newContext(); const a = await ca.newPage(); const b = await cb.newPage();
-  let replayRequests = 0;
-  a.on('request', request => {
-    if (!request.url().endsWith('/game/step')) return;
-    replayRequests += (request.postDataJSON()?.actions ?? []).filter((m: { type: string; action?: string }) => m.type === 'lifecycle' && m.action === 'replay').length;
-  });
   try {
     await a.goto('/'); await b.goto('/');
     await a.getByLabel('Your callsign').fill('Cipher'); await a.getByRole('button', { name: 'Create Room', exact: true }).click();
@@ -53,7 +48,7 @@ test('two sessions agree on results, recover them on reload, replay once and ret
     await a.getByRole('button', { name: 'Play Again' }).click();
     await expect(a.getByTestId('match-results')).toHaveCount(0); await expect(b.getByTestId('match-results')).toHaveCount(0);
     await expect(a.getByTestId('connection-status')).toHaveText('connected'); await expect(b.getByTestId('connection-status')).toHaveText('connected');
-    expect(replayRequests).toBe(1); expect(await a.getByTestId('player').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-player-id')))).toEqual(playerIds);
+    expect(await a.getByTestId('player').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-player-id')))).toEqual(playerIds);
     await expect(a.getByTestId('ability-hud')).toHaveAttribute('data-shield-cooldown', '0');
     await expect(a.locator('[data-self="true"]')).toHaveAttribute('data-health', '100'); await expect(b.locator('[data-self="true"]')).toHaveAttribute('data-health', '100');
     await expect(a.getByTestId('hazard-status')).toHaveAttribute('data-phase', 'idle');

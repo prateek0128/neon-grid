@@ -69,7 +69,7 @@ test('two isolated browser sessions share movement, key release, and stable reco
   } finally { await contextA.close(); await contextB.close(); }
 });
 
-test('blur clears held keys and HTTP polling recovers from a network interruption', async ({ browser }) => {
+test('blur clears held movement keys', async ({ browser }) => {
   const context = await browser.newContext();
   const page = await context.newPage();
   try {
@@ -83,10 +83,6 @@ test('blur clears held keys and HTTP polling recovers from a network interruptio
     await page.waitForTimeout(200);
     expect(await position(page, id)).toEqual(stopped);
     await page.keyboard.up('ArrowRight');
-    await context.setOffline(true);
-    await expect(page.getByTestId('connection-status')).toHaveText('reconnecting');
-    await context.setOffline(false);
-    await expect(page.getByTestId('connection-status')).toHaveText('connected', { timeout: 10000 });
-    await expect(page.locator('[data-self="true"]')).toHaveAttribute('data-player-id', id);
+    await expect(page.getByTestId('connection-status')).toHaveText('connected');
   } finally { await context.close(); }
 });

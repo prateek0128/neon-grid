@@ -1,5 +1,5 @@
 import { createSupabaseVerifier } from './auth.ts';
-import { createGameServer } from './server.ts';
+import { createGameServer } from './legacy-websocket-server.ts';
 import { createSupabaseRooms } from './rooms.ts';
 import { serverConfiguration } from './config.ts';
 

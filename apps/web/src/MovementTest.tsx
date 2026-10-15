@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { browserConfiguration, createBrowserAuth } from './auth';
-import { connectGame } from './connection';
-import type { ConnectionView } from './connection';
+import { connectGame } from './legacy-websocket-connection';
+import type { ConnectionView } from './legacy-websocket-connection';
 import { Arena, PLAYER_COLORS } from './Arena';
 import './style.css';
 

@@ -1,4 +1,4 @@
-> Current transport: HTTP-only gameplay. Follow [the migration report](http-only-migration-report.md); WebSocket instructions below are historical and superseded. Database fencing, one-replica limits, and secret boundaries remain applicable.
+> Current transport: authenticated WebSocket gameplay through a persistent authoritative server. The HTTP-only migration is retained as historical regression coverage. Database fencing, one-replica limits, and secret boundaries remain applicable.
 
 # Phase 1 architecture
 

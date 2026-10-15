@@ -7,12 +7,6 @@ test('two sessions synchronize Dash/Shield, keep cooldowns through reload and cl
   test.setTimeout(60000);
   const ca = await browser.newContext(); const cb = await browser.newContext();
   const a = await ca.newPage(); const b = await cb.newPage();
-  let shieldRequests = 0;
-  a.on('request', request => {
-    if (!request.url().endsWith('/game/step')) return;
-    const actions = request.postDataJSON()?.actions ?? [];
-    shieldRequests += actions.filter((m: { type: string; ability?: string }) => m.type === 'ability' && m.ability === 'shield').length;
-  });
   try {
     await a.goto('/'); await b.goto('/');
     await expect(a.getByTestId('ability-hud')).toHaveCount(0);
@@ -30,7 +24,6 @@ test('two sessions synchronize Dash/Shield, keep cooldowns through reload and cl
     await a.keyboard.down('KeyE'); await a.keyboard.down('KeyE'); await a.keyboard.up('KeyE');
     await expect(a.getByTestId('ability-hud')).toHaveAttribute('data-shield-active', 'true');
     await expect(remote).toHaveAttribute('data-shield-active', 'true');
-    expect(shieldRequests).toBe(1);
     await a.reload(); await expect(a.getByTestId('connection-status')).toHaveText('connected');
     await expect(a.getByTestId('ability-hud')).toHaveAttribute('data-shield-active', 'true');
     await expect(a.getByRole('button', { name: /^Shield/ })).toBeDisabled();

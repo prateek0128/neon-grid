@@ -1,4 +1,5 @@
 import { expect, test } from './http-test';
+import { parseServerMessage } from '../../packages/protocol/src/index.ts';
 import type { Snapshot } from '../../packages/protocol/src/index.ts';
 test.use({ trace: 'off' });
 test('moving sweeps render, share positions across two clients and recover after reload', async ({ browser }) => {
@@ -6,13 +7,14 @@ test('moving sweeps render, share positions across two clients and recover after
   test.setTimeout(60000);
   const ca = await browser.newContext(); const cb = await browser.newContext(); const a = await ca.newPage(); const b = await cb.newPage();
   const first = new Map<number, Snapshot>(); const second = new Map<number, Snapshot>();
-  for (const [page, snapshots] of [[a, first], [b, second]] as const) page.on('response', async response => {
-    if (!response.url().includes('/game/') || !response.ok()) return;
-    const data = await response.json().catch(() => ({ messages: [] }));
-    for (const message of data.messages ?? []) if (message.type === 'snapshot' && message.gameplay) {
-      snapshots.set(message.gameplay.tick, message);
+  for (const [page, snapshots] of [[a, first], [b, second]] as const) page.on('websocket', socket => {
+    socket.on('framereceived', event => {
+      if (typeof event.payload !== 'string') return;
+      const message = parseServerMessage(event.payload);
+      if (message?.type !== 'snapshot' || !message.gameplay) return;
+      snapshots.set(message.gameplay.tick, message as Snapshot);
       if (snapshots.size > 240) snapshots.delete(snapshots.keys().next().value!);
-    }
+    });
   });
   try {
     await a.goto('/'); await b.goto('/');

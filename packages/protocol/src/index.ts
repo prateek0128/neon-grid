@@ -249,6 +249,7 @@ function validMatch(value: unknown, tick: number): value is MatchState {
 }
 
 export * from './configuration.ts';
+export { validateBrowserEnvironment as validateWebSocketBrowserEnvironment } from './legacy-websocket-configuration.ts';
 
 function validExtraction(value: unknown, tick: number, match: unknown): value is ExtractionState {
   if (!object(value) || !object(match) || !nonnegativeInteger(value.opensAtTick) || !nonnegativeInteger(value.closesAtTick) ||

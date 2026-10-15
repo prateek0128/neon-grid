@@ -1,10 +1,10 @@
 # NEON GRID: CYBER HEIST
 
-HTTP-only gameplay migration: authenticated actions and adaptive snapshot polling for the complete match loop. Public deployment and live production verification remain pending; see `docs/phase4-report.md` and `docs/deployment.md`.
+WebSocket gameplay restoration: authenticated, server-authoritative snapshots run through one persistent game authority. Public deployment and live production verification remain pending; see `docs/supabase-realtime-migration-report.md` and `docs/deployment.md`.
 
 React/TypeScript/Vite renders the interface and Canvas 2D arena. Supabase Auth supplies anonymous identity; Postgres RPCs control durable room state. A separate persistent TypeScript HTTP server independently activates matches and owns all movement, cores, scores and abilities. No sibling game's repository, backend or credentials are used.
 
-Gameplay uses no WebSocket or Supabase Realtime connection. See [HTTP migration report](docs/http-only-migration-report.md) for endpoints, limits, recovery and validation. Historical transport tests are retained separately.
+Gameplay uses a direct authenticated WebSocket connection to one persistent authoritative game server. Supabase provides Auth, secure room RPCs and the database authority fence; it does not accept authoritative gameplay broadcasts. See [the Supabase Realtime migration report](docs/supabase-realtime-migration-report.md) for the transport decision and release requirements.
 
 ## Local requirements and configuration
 

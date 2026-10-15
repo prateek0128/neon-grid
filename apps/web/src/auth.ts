@@ -1,4 +1,4 @@
-import { validateBrowserEnvironment } from '@neon/protocol';
+import { validateWebSocketBrowserEnvironment } from '@neon/protocol';
 import { createClient } from '@supabase/supabase-js';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -24,7 +24,7 @@ export async function ensureBrowserIdentity(client: SupabaseClient) {
 }
 
 export function browserConfiguration() {
-  return validateBrowserEnvironment(import.meta.env, { production: import.meta.env.PROD,
+  return validateWebSocketBrowserEnvironment(import.meta.env, { production: import.meta.env.PROD,
     allowLocal: ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname) && location.protocol === 'http:', pageProtocol: location.protocol });
 }
 
