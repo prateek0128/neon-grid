@@ -53,7 +53,7 @@ it('finalizes once, sends identical results to two clients and freezes late game
   expect(a.messages.filter(m => m.type === 'match_complete')).toHaveLength(0);
   a.ws.close(); await once(a.ws, 'close'); const restored = await connect();
   expect(restored.snapshot.gameplay).toEqual(frozen.gameplay); expect(restored.welcome.playerId).toBe(a.welcome.playerId);
-});
+}, 30000);
 it('rejects active replay, nonhost actions, stale generation and insufficient connected roster', async () => {
   const a = await connect(); const b = await connect(1);
   request(a, 0); expect(await a.next(m => m.type === 'lifecycle_rejected')).toMatchObject({ reason: 'INVALID_TRANSITION' });

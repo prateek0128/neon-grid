@@ -54,4 +54,4 @@ it('fences competing HTTP authorities and aborts old matches on natural-expiry t
     await first.close(); await replacement?.close();
     await new Promise<void>(resolve => fixture.http.close(() => resolve())); await data.db.close();
   }
-});
+}, 45000);

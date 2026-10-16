@@ -118,7 +118,7 @@ it('preserves moving hazards, extraction, results, host-only replay and lobby re
   await step(replay, undefined, [{ type: 'lifecycle', action: 'return', matchId: fresh.epoch }]);
   expect(active).toBe(false);
   expect((await step(replayB)).status).toBe(401);
-});
+}, 30000);
 it('expires inactive sessions without affecting the remaining player and bounds request rates', async () => {
   const a = await connect(), b = await connect(1);
   for (let elapsed = 0; elapsed < 4000; elapsed += 200) { await step(b); await vi.advanceTimersByTimeAsync(200); }

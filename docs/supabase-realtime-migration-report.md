@@ -65,7 +65,7 @@ CI=true pnpm build:local
 git diff --check
 ```
 
-`CI=true pnpm test` was also run without custom Vitest limits. It failed after 95.55 seconds with six timeout failures: long HTTP-compatibility/lifecycle cases hit Vitest's default 10-second test limit and PGlite setup hooks hit its default 10-second hook limit under the full parallel run. It reported 28 files passed, 6 failed, 290 tests passed, 6 failed, and 3 skipped. The same room, server, and lifecycle behaviors passed in the earlier isolated runs with `--maxWorkers=1 --testTimeout=30000 --hookTimeout=30000`; no gameplay or database regression was confirmed from the default-limit failures.
+`CI=true pnpm test` initially exposed six default-limit timeouts in long HTTP/PGlite compatibility cases. The affected assertions and setup hooks now declare local 30-second or 45-second limits, based on their observed 10–38 second duration under parallel load; the global 10-second default remains unchanged for the rest of the suite. The exact full command then passed: 34 files and 299 tests in 41.42 seconds. `CI=true pnpm typecheck`, `CI=true VITE_GAME_SERVER_URL=wss://neon-grid-server-uske.onrender.com/ws pnpm build`, and `git diff --check` also passed.
 
 The room file was executed as sixteen named, isolated `vitest -t` cases because the one-process PGlite file run exceeds the local command window. Each case passed; that workaround does not modify the migration or database fixture.
 

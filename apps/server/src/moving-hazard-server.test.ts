@@ -64,4 +64,4 @@ it('sends identical moving hazards, recovers them on reconnect and preserves ext
   expect(replay.snapshot.gameplay!.extraction!.phase).toBe('closed');
   request(replay, 0, replay.snapshot.epoch, 'return');
   await replayB.next(m => m.type === 'error' && m.code === 'MATCH_UNAVAILABLE'); expect(active).toBe(false);
-});
+}, 30000);

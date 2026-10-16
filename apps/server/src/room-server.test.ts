@@ -22,7 +22,7 @@ beforeAll(async()=>{
     rooms:createSupabaseRooms(authUrl,'sb_publishable_test_fixture','sb_secret_test_fixture')});
   server.http.listen(0,'127.0.0.1'); await once(server.http,'listening'); url=`ws://127.0.0.1:${(server.http.address() as AddressInfo).port}/ws`;
   await vi.waitFor(async () => expect((await fetch(url.replace('ws:', 'http:').replace('/ws', '/ready'))).status).toBe(200), { timeout: 3000 });
-});
+}, 45000);
 afterAll(async()=>{ sockets.forEach(s=>s.terminate()); await server.close(); await new Promise<void>(resolve=>fixture.http.close(()=>resolve())); await data.db.close(); });
 async function rpcRoom(user:string,name:string,args:Record<string,unknown>) {
   const result=await data.rpc(user,name,args); if (!result.ok || !('room' in result)) throw new Error(JSON.stringify(result)); return result.room;
@@ -66,7 +66,7 @@ it('synchronizes room movement, isolates matches, preserves reconnect identity a
   expect(await cb.next(m=>m.type==='error')).toMatchObject({code:'NOT_MEMBER'});
   expect(bw.playerId).not.toBe(rw.playerId);
   const remaining=await reconnected.next<Snapshot>(m=>m.type==='snapshot'&&m.players.length===1); expect(remaining.players[0]?.id).toBe(rw.playerId);
-});
+}, 30000);
 it('allows authenticated room HTTP reads while the same member receives an Origin handshake 403', async () => {
   const { a, room } = await makeMatch();
   const authUrl = `http://127.0.0.1:${(fixture.http.address() as AddressInfo).port}`;

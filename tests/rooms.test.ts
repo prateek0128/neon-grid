@@ -12,7 +12,7 @@ describe('migration RPCs and RLS on embedded PostgreSQL (not live Supabase)', ()
   beforeEach(async () => {
     data = await createTestDatabase(); host = await data.user(); guest = await data.user();
     initial = room(await data.rpc(host, 'ng_create_room', { p_request_id: randomUUID(), p_name: 'Cipher' }));
-  });
+  }, 45000);
   afterEach(async () => { await data.db.close(); });
   async function join(id = guest, requestId = randomUUID(), code = initial.code) {
     return data.rpc(id, 'ng_join_room', { p_request_id: requestId, p_name: 'Ghost', p_code: code });
